@@ -1,5 +1,9 @@
-# Dependencies
+# Dependencies - ALL node_modules directories
+**/node_modules/
 node_modules/
+Frontend/node_modules/
+Backend/node_modules/
+Frontend_backup/node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

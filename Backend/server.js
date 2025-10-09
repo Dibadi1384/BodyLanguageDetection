@@ -4,12 +4,17 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 
+// Load environment variables
+require("dotenv").config();
+const nlpRoute = require("./routes/nlp");
+
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use("/api/nlp", nlpRoute);
 
 // Create uploads directory if it doesn't exist
 const uploadsDir = path.join(__dirname, 'uploads');

@@ -1,0 +1,10 @@
+{
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": true
+  },
+  "debug.console.fontSize": 14,
+  "debug.console.wordWrap": true,
+  "node.debug.autoAttach": "on"
+}
+

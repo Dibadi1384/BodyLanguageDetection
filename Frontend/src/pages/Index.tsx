@@ -26,6 +26,8 @@ const Index = () => {
   const [uploadingFiles, setUploadingFiles] = useState<UploadingFile[]>([]);
   const [uploadedVideos, setUploadedVideos] = useState<UploadedVideo[]>([]);
   const [detectionDescription, setDetectionDescription] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [improvedText, setImprovedText] = useState<string | null>(null);
 
   const handleUpload = (files: File[]) => {
     files.forEach((file) => {
@@ -145,22 +147,64 @@ const Index = () => {
               className="min-h-[100px] resize-none"
             />
             <div className="flex justify-end">
-              <Button 
-                onClick={() => {
-                  if (detectionDescription.trim()) {
-                    toast.success("Detection preferences saved!");
-                  } else {
+              <Button
+                onClick={async () => {
+                  if (!detectionDescription.trim()) {
                     toast.error("Please describe what you want to detect");
+                    return;
+                  }
+
+                  setIsSaving(true);
+                  setImprovedText(null);
+
+                  // Prefer Vite env variable, fall back to localhost:5000
+                  const apiBase = ((import.meta as any).env?.VITE_API_URL as string) || "http://localhost:5000";
+
+                  try {
+                    const resp = await fetch(`${apiBase}/api/nlp`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ text: detectionDescription }),
+                    });
+
+                    if (!resp.ok) {
+                      const err = await resp.json().catch(() => ({}));
+                      throw new Error(err.error || `Server responded ${resp.status}`);
+                    }
+
+                    const data = await resp.json();
+                    if (data && data.improved) {
+                      setImprovedText(data.improved.trim());
+                      toast.success("Detection preferences saved and rewritten text received!");
+                    } else {
+                      throw new Error("Invalid response from NLP API");
+                    }
+                  } catch (e: any) {
+                    console.error("NLP request failed:", e);
+                    toast.error(e.message || "Failed to save detection settings");
+                  } finally {
+                    setIsSaving(false);
                   }
                 }}
                 className="gap-2"
+                disabled={isSaving}
               >
                 <Video className="w-4 h-4" />
-                Save Detection Settings
+                {isSaving ? "Saving..." : "Save Detection Settings"}
               </Button>
             </div>
           </div>
         </div>
+
+        {/* Rewritten / improved text from NLP API */}
+        {improvedText && (
+          <div className="max-w-3xl mx-auto mb-8">
+            <h4 className="text-sm font-medium text-foreground mb-2">Rewritten prompt</h4>
+            <div className="bg-card rounded-md p-4 border border-border text-foreground">
+              {improvedText}
+            </div>
+          </div>
+        )}
 
         {/* Upload Zone */}
         <div className="mb-12">

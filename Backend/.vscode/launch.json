@@ -8,7 +8,9 @@
       "program": "${workspaceFolder}/server.js",
       "env": {
         "NODE_ENV": "development",
-        "PORT": "5000"
+        // If you want to debug on a specific port, set PORT in your environment or in this field.
+        // Leave unset (or set to an empty string) to let the server pick an available port.
+        "PORT": "${env:PORT}"
       },
       "console": "integratedTerminal",
       "restart": true,
@@ -25,7 +27,7 @@
       "args": ["${workspaceFolder}/server.js"],
       "env": {
         "NODE_ENV": "development",
-        "PORT": "5000"
+        "PORT": "${env:PORT}"
       },
       "console": "integratedTerminal",
       "restart": false,

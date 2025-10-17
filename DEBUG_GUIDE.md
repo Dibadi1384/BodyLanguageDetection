@@ -172,26 +172,36 @@ app.use((error, req, res, next) => {
 ```
 
 ### 4. API Testing
-Use tools like Postman or curl to test your API:
+Use tools like Postman or curl to test your API. If your backend is using a dynamic port, read the chosen port from `Backend/.backend-port` or set the `PORT` env variable before starting the backend.
 
 ```bash
-# Test upload endpoint
+# If you set PORT explicitly, use that port (example uses 5000):
 curl -X POST http://localhost:5000/upload \
   -F "video=@/path/to/your/video.mp4"
 
-# Test videos list endpoint
-curl http://localhost:5000/videos
+# If backend chose a dynamic port, read it from Backend/.backend-port:
+BACKEND_PORT=$(cat Backend/.backend-port)
+curl -X POST "http://localhost:${BACKEND_PORT}/upload" \
+  -F "video=@/path/to/your/video.mp4"
+
+# Test videos list endpoint (dynamic port):
+curl "http://localhost:${BACKEND_PORT}/videos"
 ```
 
 ## Troubleshooting Common Issues
 
 ### Port Already in Use
-```bash
-# Find process using port 5000
-netstat -ano | findstr :5000
+If you set an explicit `PORT` in `.env` and it conflicts with another process, adjust the port or kill the conflicting process. If you don't set `PORT`, the backend will automatically pick a free port.
 
-# Kill the process (replace PID with actual process ID)
-taskkill /PID <PID> /F
+On macOS / Linux you can find processes using a port like this:
+```bash
+# Replace 5000 with the port you're checking
+lsof -i :5000
+```
+
+To kill a process by PID:
+```bash
+kill <PID>
 ```
 
 ### File Upload Fails

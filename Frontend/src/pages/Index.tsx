@@ -157,11 +157,13 @@ const Index = () => {
                   setIsSaving(true);
                   setImprovedText(null);
 
-                  // Prefer Vite env variable, fall back to localhost:5000
-                  const apiBase = ((import.meta as any).env?.VITE_API_URL as string) || "http://localhost:5000";
+                  // Prefer Vite env variable. If not set, use a relative `/api` path so
+                  // the Vite dev server proxy can forward requests to the backend.
+                  const viteApi = ((import.meta as any).env?.VITE_API_URL as string) || '';
+                  const apiUrl = viteApi ? `${viteApi.replace(/\/$/, '')}/api/nlp` : '/api/nlp';
 
                   try {
-                    const resp = await fetch(`${apiBase}/api/nlp`, {
+                    const resp = await fetch(apiUrl, {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ text: detectionDescription }),

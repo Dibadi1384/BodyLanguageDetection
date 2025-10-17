@@ -27,7 +27,7 @@
    npm run dev
    ```
 
-The backend server will run on `http://localhost:5000`
+The backend server will run on a port specified by the environment variable `PORT` if provided. If not provided, the backend will ask the OS for an available port and write the chosen port to `Backend/.backend-port` so other tools (like the frontend dev server) can discover it.
 
 ### Frontend Setup
 
@@ -50,7 +50,7 @@ The frontend will run on `http://localhost:3000`
 
 ## Usage
 
-1. **Start both servers** (backend on port 5000, frontend on port 3000)
+1. **Start both servers** (backend on any available port, frontend on port 3000). The backend's chosen port will be written to `Backend/.backend-port` after it starts.
 2. **Open your browser** and go to `http://localhost:3000`
 3. **Upload videos** by either:
    - Dragging and dropping video files onto the upload zone
@@ -98,8 +98,8 @@ Form data:
 - Supported formats: MP4, AVI, MOV, WMV, FLV, WebM, MKV
 
 ### Server Port
-- Backend: Port 5000 (configurable via environment variable)
-- Frontend: Port 3000 (React default)
+- Backend: Configurable via environment variable `PORT`. If not set, the backend will select an available port and write it to `Backend/.backend-port`.
+- Frontend: Port 3000 (React default). The Frontend dev server will attempt to discover the backend port by reading `Backend/.backend-port` or using the `VITE_API_URL` env variable.
 
 ## Development
 

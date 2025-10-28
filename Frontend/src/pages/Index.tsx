@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { VideoUploadZone } from "@/components/VideoUploadZone";
 import { UploadProgress } from "@/components/UploadProgress";
 import { VideoCard } from "@/components/VideoCard";
@@ -29,6 +29,11 @@ const Index = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [improvedText, setImprovedText] = useState<string | null>(null);
 
+  // Load videos from backend on component mount
+  useEffect(() => {
+    handleRefresh();
+  }, []);
+
   const handleUpload = (files: File[]) => {
     files.forEach((file) => {
       const id = Math.random().toString(36).substr(2, 9);
@@ -42,75 +47,131 @@ const Index = () => {
       setUploadingFiles((prev) => [...prev, newUpload]);
       toast.success(`Started uploading ${file.name}`);
 
-      // Simulate upload progress
-      const uploadInterval = setInterval(() => {
-        setUploadingFiles((prev) =>
-          prev.map((upload) => {
-            if (upload.id === id) {
-              const newProgress = Math.min(upload.progress + 10, 100);
-              const newStatus =
-                newProgress === 100
-                  ? "processing"
-                  : upload.progress >= 50
-                  ? "processing"
-                  : "uploading";
+      // Create FormData for file upload
+      const formData = new FormData();
+      formData.append('video', file);
 
-              return {
-                ...upload,
-                progress: newProgress,
-                status: newStatus,
-              };
-            }
-            return upload;
-          })
-        );
-      }, 500);
+      // Use XMLHttpRequest for progress tracking
+      const xhr = new XMLHttpRequest();
 
-      // Complete upload after simulation
-      setTimeout(() => {
-        clearInterval(uploadInterval);
-        setUploadingFiles((prev) =>
-          prev.map((upload) =>
-            upload.id === id
-              ? { ...upload, progress: 100, status: "completed" }
-              : upload
-          )
-        );
+      // Track upload progress
+      xhr.upload.addEventListener('progress', (event) => {
+        if (event.lengthComputable) {
+          const progress = Math.round((event.loaded / event.total) * 100);
+          setUploadingFiles((prev) =>
+            prev.map((upload) =>
+              upload.id === id
+                ? { ...upload, progress, status: "uploading" }
+                : upload
+            )
+          );
+        }
+      });
 
-        // Add to uploaded videos
-        setTimeout(() => {
-          const newVideo: UploadedVideo = {
-            id,
-            title: file.name.replace(/\.[^/.]+$/, ""),
-            uploadDate: new Date().toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            }),
-            status: "analyzing",
-          };
+      // Handle successful upload
+      xhr.addEventListener('load', () => {
+        if (xhr.status === 200) {
+          try {
+            const response = JSON.parse(xhr.responseText);
+            console.log('Upload successful:', response);
 
-          setUploadedVideos((prev) => [newVideo, ...prev]);
-          setUploadingFiles((prev) => prev.filter((upload) => upload.id !== id));
-          toast.success("Video uploaded and analysis started!");
-
-          // Simulate analysis completion
-          setTimeout(() => {
-            setUploadedVideos((prev) =>
-              prev.map((video) =>
-                video.id === id ? { ...video, status: "completed" } : video
+            // Update status to processing
+            setUploadingFiles((prev) =>
+              prev.map((upload) =>
+                upload.id === id
+                  ? { ...upload, progress: 100, status: "processing" }
+                  : upload
               )
             );
-            toast.success("Analysis completed!");
-          }, 3000);
-        }, 1000);
-      }, 5000);
+
+            // Add to uploaded videos after a short delay
+            setTimeout(() => {
+              const newVideo: UploadedVideo = {
+                id,
+                title: file.name.replace(/\.[^/.]+$/, ""),
+                uploadDate: new Date().toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                }),
+                status: "analyzing",
+              };
+
+              setUploadedVideos((prev) => [newVideo, ...prev]);
+              setUploadingFiles((prev) => prev.filter((upload) => upload.id !== id));
+              toast.success("Video uploaded and analysis started!");
+
+              // Simulate analysis completion (this would be replaced with real analysis)
+              setTimeout(() => {
+                setUploadedVideos((prev) =>
+                  prev.map((video) =>
+                    video.id === id ? { ...video, status: "completed" } : video
+                  )
+                );
+                toast.success("Analysis completed!");
+              }, 3000);
+            }, 1000);
+          } catch (error) {
+            console.error('Error parsing upload response:', error);
+            toast.error("Upload completed but response parsing failed");
+          }
+        } else {
+          console.error('Upload failed:', xhr.status, xhr.responseText);
+          toast.error(`Upload failed: ${xhr.statusText}`);
+          setUploadingFiles((prev) => prev.filter((upload) => upload.id !== id));
+        }
+      });
+
+      // Handle upload errors
+      xhr.addEventListener('error', () => {
+        console.error('Upload error:', xhr.statusText);
+        toast.error("Upload failed due to network error");
+        setUploadingFiles((prev) => prev.filter((upload) => upload.id !== id));
+      });
+
+      // Handle upload timeout
+      xhr.addEventListener('timeout', () => {
+        console.error('Upload timeout');
+        toast.error("Upload timed out");
+        setUploadingFiles((prev) => prev.filter((upload) => upload.id !== id));
+      });
+
+      // Configure and send the request
+      xhr.open('POST', '/upload', true);
+      xhr.timeout = 300000; // 5 minutes timeout for large files
+      xhr.send(formData);
     });
   };
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     toast.info("Refreshing videos...");
-    // In a real app, this would fetch from the backend
+    try {
+      const response = await fetch('/videos');
+      if (!response.ok) {
+        throw new Error(`Failed to fetch videos: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      console.log('Fetched videos:', data);
+      
+      // Convert backend video data to frontend format
+      const backendVideos: UploadedVideo[] = data.videos.map((video: any) => ({
+        id: video.filename,
+        title: video.filename.replace(/\.[^/.]+$/, ""),
+        uploadDate: new Date(video.uploadedAt).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        }),
+        status: "completed" as const, // Backend videos are already processed
+      }));
+      
+      setUploadedVideos(backendVideos);
+      toast.success(`Loaded ${backendVideos.length} videos from server`);
+    } catch (error) {
+      console.error('Error fetching videos:', error);
+      toast.error("Failed to refresh videos from server");
+    }
   };
 
   return (

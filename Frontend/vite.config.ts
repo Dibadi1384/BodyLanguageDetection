@@ -36,6 +36,17 @@ export default defineConfig(({ mode }) => ({
           changeOrigin: true,
           secure: false,
         },
+        // Proxy upload and video endpoints directly
+        "/upload": {
+          target: apiTarget,
+          changeOrigin: true,
+          secure: false,
+        },
+        "/videos": {
+          target: apiTarget,
+          changeOrigin: true,
+          secure: false,
+        },
       },
     };
   })(),

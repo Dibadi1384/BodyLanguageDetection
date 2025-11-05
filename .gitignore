@@ -62,3 +62,5 @@ uploads/
 
 # Backend dynamic port file
 Backend/.backend-port
+Backend/work
+Backend/uploads

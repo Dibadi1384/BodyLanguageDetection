@@ -2,6 +2,8 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { v4: uuidv4 } = require("uuid");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+require("dotenv").config();
 
 /**
  * Main video processing pipeline
@@ -14,6 +16,33 @@ class VideoProcessor {
 		this.batchSize = options.batchSize || 4;
 		this.maxFrames = options.maxFrames || 8;
 		this.keepIntermediateFiles = options.keepIntermediateFiles || false;
+		this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+	}
+
+	/**
+	 * Refine task description using Gemini
+	 */
+	async refineTaskDescription(userInstruction) {
+		console.log("\n=== Refining Task with Gemini ===");
+		console.log(`User instruction: ${userInstruction}`);
+
+		try {
+			const model = this.genAI.getGenerativeModel({
+				model: "gemini-2.0-flash",
+			});
+			const prompt = `Take the following user instruction and rewrite it as a short, clear detection prompt that a video analysis model can understand. Focus on the importance of using bounding boxes to detect people as well as their corresponding emotions. Respond only with the rewritten prompt (no explanation):\n\nUser input: ${userInstruction}`;
+			const result = await model.generateContent(prompt);
+			const refinedPrompt = result.response.text().trim();
+
+			console.log(`Refined prompt: ${refinedPrompt}`);
+			return refinedPrompt;
+		} catch (error) {
+			console.error(
+				"Gemini refinement failed, using original instruction:",
+				error.message
+			);
+			return userInstruction;
+		}
 	}
 
 	/**
@@ -37,7 +66,11 @@ class VideoProcessor {
 
 			process.on("close", (code) => {
 				if (code !== 0) {
-					reject(new Error(`Python script failed with code ${code}\n${stderr}`));
+					reject(
+						new Error(
+							`Python script failed with code ${code}\n${stderr}`
+						)
+					);
 				} else {
 					resolve({ stdout: stdout.trim(), stderr });
 				}
@@ -66,7 +99,10 @@ class VideoProcessor {
 			...(this.maxFrames ? [this.maxFrames.toString()] : []),
 		];
 
-		const result = await this.runPythonScript("src/video_extractor.py", args);
+		const result = await this.runPythonScript(
+			"src/video_extractor.py",
+			args
+		);
 
 		const manifestPath = path.join(framesDir, "manifest.json");
 
@@ -105,7 +141,12 @@ class VideoProcessor {
 		const detections = JSON.parse(fs.readFileSync(detectionsPath, "utf8"));
 
 		console.log(
-			`✓ Analyzed ${detections.frame_detections.length} frames, detected ${detections.frame_detections.reduce((sum, f) => sum + f.people_detected, 0)} people total`
+			`✓ Analyzed ${
+				detections.frame_detections.length
+			} frames, detected ${detections.frame_detections.reduce(
+				(sum, f) => sum + f.people_detected,
+				0
+			)} people total`
 		);
 
 		return { detectionsPath, detections };
@@ -125,7 +166,10 @@ class VideoProcessor {
 
 		const args = [videoPath, detectionsPath, outputPath];
 
-		const result = await this.runPythonScript("src/video_annotator.py", args);
+		const result = await this.runPythonScript(
+			"src/video_annotator.py",
+			args
+		);
 
 		// The script outputs the annotated video path as the last line
 		const annotatedVideoPath = result.stdout.split("\n").pop();
@@ -136,7 +180,11 @@ class VideoProcessor {
 
 		const stats = fs.statSync(annotatedVideoPath);
 		console.log(
-			`Created annotated video: ${annotatedVideoPath} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`
+			`Created annotated video: ${annotatedVideoPath} (${(
+				stats.size /
+				1024 /
+				1024
+			).toFixed(2)} MB)`
 		);
 
 		return annotatedVideoPath;
@@ -160,21 +208,24 @@ class VideoProcessor {
 		console.log("VIDEO PROCESSING PIPELINE");
 		console.log("=".repeat(60));
 		console.log(`Video: ${videoPath}`);
-		console.log(`Task: ${taskDescription}`);
+		console.log(`Original Task: ${taskDescription}`);
 		console.log(`Frame Interval: ${this.frameInterval}`);
 		console.log(`Batch Size: ${this.batchSize}`);
 		console.log("=".repeat(60));
 
 		try {
-			// Step 1: Extract frames
-			const { manifestPath, framesDir, manifest } = await this.extractFrames(
-				videoPath
+			const refinedTask = await this.refineTaskDescription(
+				taskDescription
 			);
 
-			// Step 2: Analyze frames
+			// Step 1: Extract frames
+			const { manifestPath, framesDir, manifest } =
+				await this.extractFrames(videoPath);
+
+			// Step 2: Analyze frames with refined task
 			const { detectionsPath, detections } = await this.analyzeFrames(
 				manifestPath,
-				taskDescription
+				refinedTask
 			);
 
 			// Step 3: Annotate video
@@ -190,6 +241,8 @@ class VideoProcessor {
 			console.log("\n" + "=".repeat(60));
 			console.log("PROCESSING COMPLETE");
 			console.log("=".repeat(60));
+			console.log(`Original Task: ${taskDescription}`);
+			console.log(`Refined Task: ${refinedTask}`);
 			console.log(`Annotated Video: ${annotatedVideoPath}`);
 			console.log(`Detections JSON: ${detectionsPath}`);
 
@@ -199,6 +252,8 @@ class VideoProcessor {
 				detectionsPath,
 				detections,
 				videoInfo: manifest,
+				originalTask: taskDescription,
+				refinedTask: refinedTask,
 			};
 		} catch (error) {
 			console.error("\n" + "=".repeat(60));
@@ -221,17 +276,33 @@ async function main() {
 	const args = process.argv.slice(2);
 
 	if (args.length < 2) {
-		console.log("Usage: node video_processor.js <video_path> <task_description> [options]");
+		console.log(
+			"Usage: node video_processor.js <video_path> <task_description> [options]"
+		);
 		console.log("\nOptions:");
-		console.log("  --output <path>          Output path for annotated video");
-		console.log("  --frame-interval <n>     Extract every Nth frame (default: 30)");
-		console.log("  --batch-size <n>         Process n frames per batch (default: 3)");
-		console.log("  --max-frames <n>         Maximum frames to extract (default: all)");
+		console.log(
+			"  --output <path>          Output path for annotated video"
+		);
+		console.log(
+			"  --frame-interval <n>     Extract every Nth frame (default: 30)"
+		);
+		console.log(
+			"  --batch-size <n>         Process n frames per batch (default: 3)"
+		);
+		console.log(
+			"  --max-frames <n>         Maximum frames to extract (default: all)"
+		);
 		console.log("  --keep-files             Keep intermediate frame files");
-		console.log("  --work-dir <path>        Work directory (default: ./work)");
+		console.log(
+			"  --work-dir <path>        Work directory (default: ./work)"
+		);
 		console.log("\nExample:");
-		console.log('  node video_processor.js video.mp4 "Detect people and analyze their emotions"');
-		console.log('  node video_processor.js video.mp4 "Identify people performing actions" --frame-interval 15');
+		console.log(
+			'  node video_processor.js video.mp4 "Detect people and analyze their emotions"'
+		);
+		console.log(
+			'  node video_processor.js video.mp4 "Identify people performing actions" --frame-interval 15'
+		);
 		process.exit(1);
 	}
 

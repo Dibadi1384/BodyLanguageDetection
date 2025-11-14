@@ -17,14 +17,13 @@ router.post("/", async (req, res) => {
 		const detectionPrompt = result.response.text().trim();
 
 		if (framePath) {
-			// analyze frame with Llama4 using Gemini's output
+			// analyze frame with
 			const analysisResult = await analyzeFrame(
 				framePath,
 				detectionPrompt
 			);
 			res.json({ improved: detectionPrompt, analysis: analysisResult });
 		} else {
-			// just return improved prompt
 			res.json({ improved: detectionPrompt });
 		}
 	} catch (error) {

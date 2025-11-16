@@ -144,7 +144,7 @@ def annotate_video(
     
     frame_idx = 0
     processed_count = 0
-    
+    detection = None
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -163,6 +163,13 @@ def annotate_video(
                 draw_detection(frame, person, color=color)
             
             processed_count += 1
+        elif detection: # if not prediction made on frame_idx, use previous detection
+            for person in detection['people']:
+                color_idx = person['person_id'] % 7
+                color = COLORS[color_idx]
+                draw_detection(frame, person, color=color)
+            processed_count += 1
+            
         out.write(frame)
         
         if show_progress and frame_idx % 100 == 0:

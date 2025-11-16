@@ -112,15 +112,13 @@ def extract_frames(
     return manifest
 
 if __name__ == "__main__":
-
-    
     if len(sys.argv) < 2:
         print("Usage: python video_extractor.py <video_path> [output_dir] [frame_interval] [max_frames]")
         sys.exit(1)
     
     video_path = sys.argv[1]
     output_dir = sys.argv[2] if len(sys.argv) > 2 else "./frames"
-    frame_interval = int(sys.argv[3]) if len(sys.argv) > 3 else 30
+    frame_interval = int(sys.argv[3]) if len(sys.argv) > 3 else 15
     max_frames = int(sys.argv[4]) if len(sys.argv) > 4 else None
     
     manifest = extract_frames(video_path, output_dir, frame_interval, max_frames)

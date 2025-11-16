@@ -3,9 +3,9 @@ import json
 import os
 import base64
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 from pydantic import BaseModel, Field
-from langchain.output_parsers import PydanticOutputParser
+from langchain_core.output_parsers import PydanticOutputParser
 from PIL import Image
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -38,7 +38,7 @@ class DetectedPerson(BaseModel):
     )
 
 class ImageAnalysis(BaseModel):
-    image_id: int = Field(..., ge=0)
+    image_id: int = Field(..., ge=0, description="Identification for the image idx, should match the index provided in the image input")
     image_width: int = Field(..., gt=0)
     image_height: int = Field(..., gt=0)
     people_detected: int = Field(..., ge=0, description="Total number of people detected")
@@ -62,6 +62,7 @@ TASK: {task_description}
 
 OUTPUT: Return EXACTLY ONE valid JSON object following the schema below."""},
         {"type": "text", "text": schema_instructions},
+        {"type": "text", "text": "**Important note:** The image_id you generate, should match the IMAGE ID you will be provided with the image. Do not change it "},
         {"type": "text", "text": """
 DETECTION GUIDELINES:
 
@@ -107,7 +108,7 @@ Analyze systematically: scan the entire image, identify each person, perform the
         })
         user_texts.append({
             "type": "text",
-            "text": f"[IMAGE {img['id']}] File: {img['file_name']} | Dimensions: {img['width']}x{img['height']} pixels"
+            "text": f"[IMAGE ID: {img['id']}] File: {img['file_name']} | Dimensions: {img['width']}x{img['height']} pixels"
         })
 
     return user_texts
@@ -121,7 +122,9 @@ def analyze_batch(
     model_name: str, 
     images_payload: List[Dict], 
     task_description: str,
-    max_tokens: int = 4000
+    max_tokens: int = 4000,
+    fallback_client = None,
+    fallback_model: str = None
 ):
     """Analyze a batch of images with flexible task"""
     
@@ -135,6 +138,7 @@ def analyze_batch(
 
     parser = PydanticOutputParser(pydantic_object=BatchAnalysisResult)
     
+    # Try primary client first
     try:
         resp = client.chat.completions.create(
             model=model_name,
@@ -146,10 +150,32 @@ def analyze_batch(
         parsed = parser.parse(text_out)
         return parsed
     except Exception as e:
-        print(f"Error analyzing batch: {e}", file=sys.stderr)
-        if 'resp' in locals():
-            print(f"Raw response: {resp.choices[0].message.content}", file=sys.stderr)
-        return None
+        error_msg = str(e).lower()
+        # Check if it's a token limit/quota error
+        if fallback_client and any(keyword in error_msg for keyword in ['quota', 'limit', 'rate', 'token']):
+            print(f"Primary API failed (quota/limit): {e}", file=sys.stderr)
+            print(f"Attempting fallback to OpenRouter...", file=sys.stderr)
+            try:
+                resp = fallback_client.chat.completions.create(
+                    model=fallback_model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.0,
+                )
+                text_out = resp.choices[0].message.content
+                parsed = parser.parse(text_out)
+                print(f"Fallback successful", file=sys.stderr)
+                return parsed
+            except Exception as fallback_error:
+                print(f"Fallback also failed: {fallback_error}", file=sys.stderr)
+                if 'resp' in locals():
+                    print(f"Raw response: {resp.choices[0].message.content}", file=sys.stderr)
+                return None
+        else:
+            print(f"Error analyzing batch: {e}", file=sys.stderr)
+            if 'resp' in locals():
+                print(f"Raw response: {resp.choices[0].message.content}", file=sys.stderr)
+            return None
 
 
 def load_frame_payload(frame_info: Dict) -> Dict:
@@ -168,7 +194,7 @@ def load_frame_payload(frame_info: Dict) -> Dict:
         b64 = base64.b64encode(f.read()).decode("utf-8")
     
     return {
-        "id": frame_info['index'],
+        "id": frame_info['original_frame_number'],
         "file_name": frame_info['filename'],
         "width": w,
         "height": h,
@@ -181,7 +207,9 @@ def process_frames_in_batches(
     model_name: str, 
     frames: List[Dict], 
     task_description: str,
-    batch_size: int = 3
+    batch_size: int = 3,
+    fallback_client = None,
+    fallback_model: str = None
 ):
     """Process frames in batches"""
     all_detections = []
@@ -214,7 +242,14 @@ def process_frames_in_batches(
                 continue
             
             # Analyze batch
-            result = analyze_batch(client, model_name, images_payload, task_description)
+            result = analyze_batch(
+                client, 
+                model_name, 
+                images_payload, 
+                task_description,
+                fallback_client=fallback_client,
+                fallback_model=fallback_model
+            )
             
             if result:
                 # Store results with frame metadata
@@ -277,6 +312,8 @@ def main():
     
     # Load environment
     HF_TOKEN = os.environ.get("HF_TOKEN")
+    OPEN_ROUTER_API_KEY = os.environ.get("OPEN_ROUTER_API_KEY")
+    
     if not HF_TOKEN:
         print("Error: HF_TOKEN environment variable not set", file=sys.stderr)
         sys.exit(1)
@@ -299,11 +336,21 @@ def main():
     
     print(f"Loaded {len(frames)} frames", file=sys.stderr)
     
-    # Initialize client
+    # Initialize primary client
     client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=HF_TOKEN)
     model_name = "Qwen/Qwen3-VL-8B-Instruct:novita"
     
     print(f"Using model: {model_name}", file=sys.stderr)
+    
+    # Initialize fallback client if available
+    fallback_client = None
+    fallback_model = None
+    if OPEN_ROUTER_API_KEY:
+        fallback_client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPEN_ROUTER_API_KEY)
+        fallback_model = "qwen/qwen3-vl-8b-instruct"
+        print(f"Fallback configured: OpenRouter with model {fallback_model}", file=sys.stderr)
+    else:
+        print(f"Warning: OPEN_ROUTER_API_KEY not found - no fallback available", file=sys.stderr)
     
     # Process frames
     detections = process_frames_in_batches(
@@ -311,7 +358,9 @@ def main():
         model_name, 
         frames, 
         task_description,
-        batch_size=batch_size
+        batch_size=batch_size,
+        fallback_client=fallback_client,
+        fallback_model=fallback_model
     )
     
     if not detections:

@@ -17,6 +17,16 @@ app.use(cors());
 app.use(express.json());
 app.use("/api/nlp", nlpRoute);
 
+app.use((req, res, next) => {
+  if (req.method === 'POST' && req.path === '/upload') {
+    console.log(`[UPLOAD REQUEST] Incoming upload request: headers =>`, {
+      'content-type': req.headers['content-type'],
+      'content-length': req.headers['content-length']
+    });
+  }
+  next();
+});
+
 // Create uploads directory if it doesn't exist
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -35,22 +45,23 @@ const storage = multer.diskStorage({
   }
 });
 
-// File filter to only allow video files
 const fileFilter = (req, file, cb) => {
   const allowedMimeTypes = [
     'video/mp4',
     'video/avi',
     'video/mov',
+    'video/quicktime',
     'video/wmv',
     'video/flv',
     'video/webm',
     'video/mkv'
   ];
-  
+
   if (allowedMimeTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error('Only video files are allowed!'), false);
+    console.error(`[UPLOAD ERROR] Rejected file with mimetype '${file.mimetype}' and original name '${file.originalname}'`);
+    cb(new Error(`Only video files are allowed. Received mimetype '${file.mimetype}'.`), false);
   }
 };
 
@@ -71,6 +82,7 @@ app.get('/', (req, res) => {
 app.post('/upload', upload.single('video'), (req, res) => {
   try {
     if (!req.file) {
+      console.error('[UPLOAD ERROR] Multer succeeded but req.file missing.');
       return res.status(400).json({ error: 'No video file uploaded' });
     }
 
@@ -79,18 +91,20 @@ app.post('/upload', upload.single('video'), (req, res) => {
       originalName: req.file.originalname,
       size: req.file.size,
       mimetype: req.file.mimetype,
+      destination: req.file.destination,
+      path: req.file.path,
       uploadedAt: new Date().toISOString()
     };
 
-    console.log('Video uploaded:', fileInfo);
-    
+    console.log('[UPLOAD SUCCESS] Video stored:', fileInfo);
+
     res.json({
       message: 'Video uploaded successfully!',
       file: fileInfo
     });
   } catch (error) {
-    console.error('Upload error:', error);
-    res.status(500).json({ error: 'Failed to upload video' });
+    console.error('[UPLOAD ERROR] Unexpected exception:', error);
+    res.status(500).json({ error: 'Failed to upload video', details: error.message });
   }
 });
 
@@ -124,12 +138,19 @@ app.get('/videos', (req, res) => {
 app.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
+      console.error('[MULTER ERROR] File size limit exceeded');
       return res.status(400).json({ error: 'File too large. Maximum size is 500MB.' });
     }
+    console.error('[MULTER ERROR]', error);
+    return res.status(400).json({ error: error.message });
   }
-  
-  res.status(500).json({ error: error.message || 'Something went wrong!' });
+
+  console.error('[GENERAL ERROR]', error);
+  const statusCode = /mimetype/i.test(error.message) ? 400 : 500;
+  res.status(statusCode).json({ error: error.message || 'Something went wrong!' });
 });
+
+app.use('/uploads', express.static(uploadsDir));
 
 const server = app.listen(PORT, () => {
   // When PORT is 0, the OS assigns a free port — read it from the server instance

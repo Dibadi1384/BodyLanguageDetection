@@ -48,6 +48,7 @@ async function testVideoPipeline() {
 		maxFrames: 3, // Only analyze 3 frames for fast testing
 		keepIntermediateFiles: true, // Keep files so we can inspect them
 		workDir: "./work",
+		skipAnnotation: false, // Set to true to skip video creation for even faster testing
 	});
 
 	try {
@@ -95,12 +96,21 @@ async function testVideoPipeline() {
 							console.log(`\nPerson ${personIdx + 1}:`);
 							if (person.analysis_result) {
 								console.log(
-									`  Analysis: ${JSON.stringify(
-										person.analysis_result,
-										null,
-										2
-									)}`
+									`  Emotion: ${
+										person.analysis_result.emotion || "N/A"
+									}`
 								);
+								console.log(
+									`  Confidence: ${
+										person.analysis_result.confidence ||
+										"N/A"
+									}`
+								);
+								if (person.analysis_result.intensity) {
+									console.log(
+										`  Intensity: ${person.analysis_result.intensity}`
+									);
+								}
 							}
 							if (person.visual_description) {
 								console.log(
@@ -108,7 +118,7 @@ async function testVideoPipeline() {
 								);
 							}
 							console.log(
-								`  Confidence: ${
+								`  Detection Confidence: ${
 									person.bbox_confidence || "N/A"
 								}`
 							);

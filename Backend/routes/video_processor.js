@@ -16,6 +16,7 @@ class VideoProcessor {
 		this.batchSize = options.batchSize || 4;
 		this.maxFrames = options.maxFrames || 8;
 		this.keepIntermediateFiles = options.keepIntermediateFiles || false;
+		this.skipAnnotation = options.skipAnnotation || false;
 		this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 	}
 
@@ -240,12 +241,19 @@ class VideoProcessor {
 				refinedTask
 			);
 
-			// Step 3: Annotate video
-			const annotatedVideoPath = await this.annotateVideo(
-				videoPath,
-				detectionsPath,
-				outputPath
-			);
+			// Step 3: Annotate video (optional, skip for faster testing)
+			let annotatedVideoPath = null;
+			if (!this.skipAnnotation) {
+				annotatedVideoPath = await this.annotateVideo(
+					videoPath,
+					detectionsPath,
+					outputPath
+				);
+			} else {
+				console.log(
+					"\nSkipping video annotation (skipAnnotation=true)"
+				);
+			}
 
 			// Cleanup
 			this.cleanup(framesDir);

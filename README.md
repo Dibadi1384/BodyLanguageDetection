@@ -48,6 +48,11 @@ The backend server will run on a port specified by the environment variable `POR
 
 The frontend will run on `http://localhost:3000`
 
+### Demo Videos
+
+To test the model with example inputs, you can download all demo video clips here:
+`https://drive.google.com/drive/folders/1ovj5GqcfMnLB3oHrqJtHkMqxrixgbc6Z?usp=drive_link`
+
 ## Usage
 
 1. **Start both servers** (backend on any available port, frontend on port 3000). The backend's chosen port will be written to `Backend/.backend-port` after it starts.

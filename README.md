@@ -51,7 +51,9 @@ The frontend will run on `http://localhost:3000`
 ### Demo Videos
 
 To test the model with example inputs, you can download all demo video clips here:
-`https://drive.google.com/drive/folders/1ovj5GqcfMnLB3oHrqJtHkMqxrixgbc6Z?usp=drive_link`
+```bash
+https://drive.google.com/drive/folders/1ovj5GqcfMnLB3oHrqJtHkMqxrixgbc6Z?usp=drive_link
+```
 
 ## Usage
 

@@ -1,12 +1,9 @@
+import cv2
 import sys
 import os
 import json
 from typing import Dict, Optional
 from pathlib import Path
-
-
-import cv2
-
 
 def extract_frames(
     video_path: str,

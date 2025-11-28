@@ -16,6 +16,7 @@ class VideoProcessor {
 		this.batchSize = options.batchSize || 4;
 		this.maxFrames = options.maxFrames || 8;
 		this.keepIntermediateFiles = options.keepIntermediateFiles || false;
+		this.skipAnnotation = options.skipAnnotation || false;
 		this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 	}
 
@@ -50,7 +51,19 @@ class VideoProcessor {
 	 */
 	async runPythonScript(scriptPath, args = []) {
 		return new Promise((resolve, reject) => {
-			const process = spawn("python", [scriptPath, ...args]);
+			// Use virtual environment Python if it exists
+			const venvPython = path.join(
+				__dirname,
+				"..",
+				"venv",
+				"bin",
+				"python3"
+			);
+			const pythonCmd = fs.existsSync(venvPython)
+				? venvPython
+				: "python3";
+
+			const process = spawn(pythonCmd, [scriptPath, ...args]);
 
 			let stdout = "";
 			let stderr = "";
@@ -100,7 +113,7 @@ class VideoProcessor {
 		];
 
 		const result = await this.runPythonScript(
-			"src/video_extractor.py",
+			"routes/src/video_extractor.py",
 			args
 		);
 
@@ -127,7 +140,7 @@ class VideoProcessor {
 		const args = [manifestPath, taskDescription, this.batchSize.toString()];
 
 		const result = await this.runPythonScript(
-			"src/frame_analyzer.py",
+			"routes/src/frame_analyzer.py",
 			args
 		);
 
@@ -167,7 +180,7 @@ class VideoProcessor {
 		const args = [videoPath, detectionsPath, outputPath];
 
 		const result = await this.runPythonScript(
-			"src/video_annotator.py",
+			"routes/src/video_annotator.py",
 			args
 		);
 
@@ -228,12 +241,19 @@ class VideoProcessor {
 				refinedTask
 			);
 
-			// Step 3: Annotate video
-			const annotatedVideoPath = await this.annotateVideo(
-				videoPath,
-				detectionsPath,
-				outputPath
-			);
+			// Step 3: Annotate video (optional, skip for faster testing)
+			let annotatedVideoPath = null;
+			if (!this.skipAnnotation) {
+				annotatedVideoPath = await this.annotateVideo(
+					videoPath,
+					detectionsPath,
+					outputPath
+				);
+			} else {
+				console.log(
+					"\nSkipping video annotation (skipAnnotation=true)"
+				);
+			}
 
 			// Cleanup
 			this.cleanup(framesDir);
@@ -311,7 +331,7 @@ async function main() {
 
 	// Parse options
 	const options = {
-		frameInterval: 1,
+		frameInterval: 60,
 		batchSize: 4,
 		maxFrames: null,
 		keepIntermediateFiles: false,

@@ -122,7 +122,7 @@ def analyze_batch(
     model_name: str, 
     images_payload: List[Dict], 
     task_description: str,
-    max_tokens: int = 4000,
+    max_tokens: int = 8000,
     fallback_client = None,
     fallback_model: str = None
 ):
@@ -147,8 +147,45 @@ def analyze_batch(
             temperature=0.0,
         )
         text_out = resp.choices[0].message.content
-        parsed = parser.parse(text_out)
-        return parsed
+        
+        # Clean up the response - remove markdown code blocks if present
+        text_out = text_out.strip()
+        if text_out.startswith("```json"):
+            text_out = text_out[7:]
+        if text_out.startswith("```"):
+            text_out = text_out[3:]
+        if text_out.endswith("```"):
+            text_out = text_out[:-3]
+        text_out = text_out.strip()
+        
+        # Parse JSON directly and validate with Pydantic
+        try:
+            json_data = json.loads(text_out)
+            
+            # Convert bbox arrays to objects if needed
+            if "images" in json_data:
+                for img in json_data["images"]:
+                    if "people" in img:
+                        for person in img["people"]:
+                            if "bbox" in person and isinstance(person["bbox"], list):
+                                # Convert [x_min, y_min, x_max, y_max] to object
+                                bbox_list = person["bbox"]
+                                person["bbox"] = {
+                                    "x_min": bbox_list[0],
+                                    "y_min": bbox_list[1],
+                                    "x_max": bbox_list[2],
+                                    "y_max": bbox_list[3]
+                                }
+            
+            parsed = BatchAnalysisResult(**json_data)
+            return parsed
+            
+        except json.JSONDecodeError as json_err:
+            print(f"JSON decode error: {json_err}", file=sys.stderr)
+            print(f"Raw response (first 500 chars): {text_out[:500]}", file=sys.stderr)
+            print(f"Raw response (last 100 chars): {text_out[-100:]}", file=sys.stderr)
+            return None
+        
     except Exception as e:
         error_msg = str(e).lower()
         # Check if it's a token limit/quota error
@@ -163,9 +200,33 @@ def analyze_batch(
                     temperature=0.0,
                 )
                 text_out = resp.choices[0].message.content
-                parsed = parser.parse(text_out)
-                print(f"Fallback successful", file=sys.stderr)
-                return parsed
+                
+                # Parse JSON directly and validate with Pydantic
+                try:
+                    json_data = json.loads(text_out)
+                    
+                    # Convert bbox arrays to objects if needed
+                    if "images" in json_data:
+                        for img in json_data["images"]:
+                            if "people" in img:
+                                for person in img["people"]:
+                                    if "bbox" in person and isinstance(person["bbox"], list):
+                                        bbox_list = person["bbox"]
+                                        person["bbox"] = {
+                                            "x_min": bbox_list[0],
+                                            "y_min": bbox_list[1],
+                                            "x_max": bbox_list[2],
+                                            "y_max": bbox_list[3]
+                                        }
+                    
+                    parsed = BatchAnalysisResult(**json_data)
+                    print(f"Fallback successful", file=sys.stderr)
+                    return parsed
+                except json.JSONDecodeError as json_err:
+                    print(f"Fallback JSON decode error: {json_err}", file=sys.stderr)
+                    print(f"Raw response: {text_out}", file=sys.stderr)
+                    return None
+                    
             except Exception as fallback_error:
                 print(f"Fallback also failed: {fallback_error}", file=sys.stderr)
                 if 'resp' in locals():
@@ -207,7 +268,7 @@ def process_frames_in_batches(
     model_name: str, 
     frames: List[Dict], 
     task_description: str,
-    batch_size: int = 3,
+    batch_size: int = 2,  # Reduced from 3 to 2 to avoid token limits
     fallback_client = None,
     fallback_model: str = None
 ):
@@ -247,6 +308,7 @@ def process_frames_in_batches(
                 model_name, 
                 images_payload, 
                 task_description,
+                max_tokens=8000,
                 fallback_client=fallback_client,
                 fallback_model=fallback_model
             )
@@ -308,7 +370,7 @@ def main():
     task_description = sys.argv[2]
     
     # Optional parameters
-    batch_size = int(sys.argv[3]) if len(sys.argv) > 3 else 3
+    batch_size = int(sys.argv[3]) if len(sys.argv) > 3 else 2 
     
     # Load environment
     HF_TOKEN = os.environ.get("HF_TOKEN")
@@ -338,7 +400,8 @@ def main():
     
     # Initialize primary client
     client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=HF_TOKEN)
-    model_name = "Qwen/Qwen3-VL-8B-Instruct:novita"
+    # model_name = "Qwen/Qwen3-VL-8B-Instruct:novita"
+    model_name = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
     
     print(f"Using model: {model_name}", file=sys.stderr)
     
@@ -347,7 +410,7 @@ def main():
     fallback_model = None
     if OPEN_ROUTER_API_KEY:
         fallback_client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPEN_ROUTER_API_KEY)
-        fallback_model = "qwen/qwen3-vl-8b-instruct"
+        fallback_model = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
         print(f"Fallback configured: OpenRouter with model {fallback_model}", file=sys.stderr)
     else:
         print(f"Warning: OPEN_ROUTER_API_KEY not found - no fallback available", file=sys.stderr)

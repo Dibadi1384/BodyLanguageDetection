@@ -20,6 +20,10 @@ interface UploadedVideo {
   title: string;
   uploadDate: string;
   status: "processing" | "completed" | "analyzing";
+  annotatedUrl?: string;
+  detectionsUrl?: string;
+  stem?: string;
+  statusMessage?: string;
 }
 
 const Index = () => {
@@ -84,33 +88,93 @@ const Index = () => {
               )
             );
 
-            // Add to uploaded videos after a short delay
-            setTimeout(() => {
-              const newVideo: UploadedVideo = {
-                id,
-                title: file.name.replace(/\.[^/.]+$/, ""),
-                uploadDate: new Date().toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                }),
-                status: "analyzing",
-              };
+            // Begin status polling using the uploaded file stem
+            const uploadedFilename: string = response?.file?.filename || file.name;
+            const stem = uploadedFilename.replace(/\.[^/.]+$/, "");
 
-              setUploadedVideos((prev) => [newVideo, ...prev]);
-              setUploadingFiles((prev) => prev.filter((upload) => upload.id !== id));
-              toast.success("Video uploaded and analysis started!");
+            const newVideo: UploadedVideo = {
+              id,
+              title: file.name.replace(/\.[^/.]+$/, ""),
+              uploadDate: new Date().toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+                year: "numeric",
+              }),
+              status: "analyzing",
+              stem,
+              statusMessage: "Starting analysis...",
+            };
+            setUploadedVideos((prev) => [newVideo, ...prev]);
+            setUploadingFiles((prev) => prev.filter((upload) => upload.id !== id));
+            toast.success("Video uploaded. Analysis started...");
 
-              // Simulate analysis completion (this would be replaced with real analysis)
-              setTimeout(() => {
-                setUploadedVideos((prev) =>
-                  prev.map((video) =>
-                    video.id === id ? { ...video, status: "completed" } : video
-                  )
-                );
-                toast.success("Analysis completed!");
-              }, 3000);
-            }, 1000);
+            const interval = setInterval(async () => {
+              try {
+                const resp = await fetch(`/status/${encodeURIComponent(stem)}`);
+                if (!resp.ok) {
+                  // If not found, keep waiting briefly
+                  if (resp.status === 404) return;
+                  throw new Error(`Status ${resp.status}`);
+                }
+                const status = await resp.json();
+
+                if (status.status === 'completed' || status.status === 'failed') {
+                  clearInterval(interval);
+
+                  // Map backend paths to frontend URLs
+                  // Prefer absolute backend base if provided via Vite env
+                  const apiBase = ((import.meta as any).env?.VITE_API_URL as string) || '';
+                  const toPublicUrl = (p?: string) => {
+                    if (!p) return undefined;
+                    // Normalize separators
+                    const norm = p.replace(/\\/g, '/');
+                    const uploadsIdx = norm.indexOf('/Backend/uploads/');
+                    const workIdx = norm.indexOf('/Backend/work/');
+                    if (uploadsIdx !== -1) {
+                      const sub = norm.substring(uploadsIdx + '/Backend/uploads/'.length);
+                      return apiBase ? `${apiBase.replace(/\/$/, '')}/uploads/${sub}` : `/uploads/${sub}`;
+                    }
+                    if (workIdx !== -1) {
+                      const sub = norm.substring(workIdx + '/Backend/work/'.length);
+                      return apiBase ? `${apiBase.replace(/\/$/, '')}/work/${sub}` : `/work/${sub}`;
+                    }
+                    // Fallback: if already relative
+                      if (norm.startsWith('/uploads/') || norm.startsWith('/work/')) return norm;
+                    return undefined;
+                  };
+
+                  // Only surface detections JSON in the UI for now
+                  const annotatedUrl = undefined;
+                  const detectionsUrl = toPublicUrl(status.detectionsPath);
+
+                  setUploadedVideos((prev) => prev.map((v) => (
+                    v.id === id
+                      ? {
+                          ...v,
+                          status: status.status === 'completed' ? 'completed' : 'processing',
+                          detectionsUrl,
+                          statusMessage: status.status === 'completed' ? 'Completed' : (status.error || 'Analysis failed'),
+                        }
+                      : v
+                  )));
+
+                  if (status.status === 'completed') {
+                    toast.success('Analysis completed!');
+                  } else {
+                    toast.error(status.error || 'Analysis failed');
+                  }
+                }
+                else if (status.status === 'running' || status.status === 'queued') {
+                  setUploadedVideos((prev) => prev.map((v) => (
+                    v.id === id
+                      ? { ...v, status: status.status === 'running' ? 'analyzing' : 'processing', statusMessage: status.status }
+                      : v
+                  )));
+                }
+              } catch (e) {
+                console.error('Polling error:', e);
+              }
+            }, 1500);
           } catch (error) {
             console.error('Error parsing upload response:', error);
             toast.error("Upload completed but response parsing failed");
@@ -163,7 +227,8 @@ const Index = () => {
           day: "numeric",
           year: "numeric",
         }),
-        status: "completed" as const, // Backend videos are already processed
+        status: "completed" as const,
+        // These are raw uploads. Annotated assets are discovered via status polling on new uploads.
       }));
       
       setUploadedVideos(backendVideos);

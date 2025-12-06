@@ -112,10 +112,10 @@ class VideoProcessor {
 			...(this.maxFrames ? [this.maxFrames.toString()] : []),
 		];
 
-		const result = await this.runPythonScript(
-			"routes/src/video_extractor.py",
-			args
-		);
+
+		// Resolve python script absolute path relative to this routes folder
+		const extractorScript = path.join(__dirname, "src", "video_extractor.py");
+		const result = await this.runPythonScript(extractorScript, args);
 
 		const manifestPath = path.join(framesDir, "manifest.json");
 
@@ -137,12 +137,12 @@ class VideoProcessor {
 		console.log("\n=== Step 2: Analyzing Frames ===");
 		console.log(`Task: ${taskDescription}`);
 
-		const args = [manifestPath, taskDescription, this.batchSize.toString()];
+		// Cap batch size to avoid oversized requests hitting router limits
+		const safeBatchSize = Math.min(this.batchSize, 2);
+		const args = [manifestPath, taskDescription, safeBatchSize.toString()];
 
-		const result = await this.runPythonScript(
-			"routes/src/frame_analyzer.py",
-			args
-		);
+		const analyzerScript = path.join(__dirname, "src", "frame_analyzer.py");
+		const result = await this.runPythonScript(analyzerScript, args);
 
 		// The script outputs the detections path as the last line
 		const detectionsPath = result.stdout.split("\n").pop();
@@ -179,10 +179,8 @@ class VideoProcessor {
 
 		const args = [videoPath, detectionsPath, outputPath];
 
-		const result = await this.runPythonScript(
-			"routes/src/video_annotator.py",
-			args
-		);
+		const annotatorScript = path.join(__dirname, "src", "video_annotator.py");
+		const result = await this.runPythonScript(annotatorScript, args);
 
 		// The script outputs the annotated video path as the last line
 		const annotatedVideoPath = result.stdout.split("\n").pop();

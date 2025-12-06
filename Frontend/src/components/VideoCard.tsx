@@ -8,11 +8,13 @@ interface VideoCardProps {
     uploadDate: string;
     status: "processing" | "completed" | "analyzing";
     thumbnail?: string;
+    detectionsUrl?: string;
+    statusMessage?: string;
   };
 }
 
 export const VideoCard = ({ video }: VideoCardProps) => {
-  const { title, uploadDate, status, thumbnail } = video;
+  const { title, uploadDate, status, thumbnail, detectionsUrl, statusMessage } = video;
   const statusConfig = {
     processing: {
       label: "Processing",
@@ -68,9 +70,24 @@ export const VideoCard = ({ video }: VideoCardProps) => {
           </Badge>
         </div>
 
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Clock className="w-4 h-4" />
-          <span>{uploadDate}</span>
+        <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4" />
+            <span>{uploadDate}</span>
+          </div>
+          {statusMessage && (
+            <span className="text-xs text-muted-foreground">{statusMessage}</span>
+          )}
+          {detectionsUrl && (
+            <a
+              href={detectionsUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-primary hover:underline"
+            >
+              View JSON
+            </a>
+          )}
         </div>
       </div>
     </div>

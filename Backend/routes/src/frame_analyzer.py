@@ -400,8 +400,8 @@ def main():
     
     # Initialize primary client
     client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=HF_TOKEN)
-    # model_name = "Qwen/Qwen3-VL-8B-Instruct:novita"
-    model_name = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
+    model_name = "Qwen/Qwen3-VL-8B-Instruct:novita"
+    # model_name = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
     
     print(f"Using model: {model_name}", file=sys.stderr)
     

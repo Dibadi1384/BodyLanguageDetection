@@ -400,8 +400,10 @@ def main():
     
     # Initialize primary client
     client = OpenAI(base_url="https://router.huggingface.co/v1", api_key=HF_TOKEN)
-    model_name = "Qwen/Qwen3-VL-8B-Instruct:novita"
+    # model_name = "Qwen/Qwen3-VL-8B-Instruct:novita"
     # model_name = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
+    # Use a vision-capable chat model compatible with images
+    model_name = "Qwen/Qwen2.5-VL-7B-Instruct"
     
     print(f"Using model: {model_name}", file=sys.stderr)
     
@@ -410,7 +412,7 @@ def main():
     fallback_model = None
     if OPEN_ROUTER_API_KEY:
         fallback_client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPEN_ROUTER_API_KEY)
-        fallback_model = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
+        fallback_model = "Qwen/Qwen2.5-VL-7B-Instruct"
         print(f"Fallback configured: OpenRouter with model {fallback_model}", file=sys.stderr)
     else:
         print(f"Warning: OPEN_ROUTER_API_KEY not found - no fallback available", file=sys.stderr)
@@ -444,9 +446,11 @@ def main():
         "frame_detections": detections
     }
     
-    # Save results
-    work_dir = Path(manifest_path).parent
-    output_path = work_dir / "detections.json"
+    # Save results outside the frames directory to avoid cleanup removal
+    frames_dir = Path(manifest_path).parent
+    work_root = frames_dir.parent
+    video_stem = manifest.get('video_stem', 'video')
+    output_path = work_root / f"{video_stem}_detections.json"
     
     try:
         with open(output_path, 'w') as f:

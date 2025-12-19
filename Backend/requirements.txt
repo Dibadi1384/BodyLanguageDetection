@@ -6,3 +6,6 @@ openai
 python-dotenv
 torch
 uuid
+pandas 
+seaborn
+matplotlib

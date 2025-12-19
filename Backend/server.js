@@ -3,6 +3,7 @@ const multer = require('multer');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const { VideoProcessor } = require('./routes/video_processor');
 
 // Load environment variables
 require("dotenv").config();
@@ -97,10 +98,66 @@ app.post('/upload', upload.single('video'), (req, res) => {
     };
 
     console.log('[UPLOAD SUCCESS] Video stored:', fileInfo);
+    // Auto-start processing pipeline asynchronously
+    const autoProcess = process.env.AUTO_PROCESS !== 'false';
+    if (autoProcess) {
+      const taskDescription = process.env.DEFAULT_TASK_DESCRIPTION || 'Detect people and analyze their emotions with bounding boxes.';
+      const options = {
+        frameInterval: parseInt(process.env.FRAME_INTERVAL || '60'),
+        batchSize: parseInt(process.env.BATCH_SIZE || '4'),
+        maxFrames: process.env.MAX_FRAMES ? parseInt(process.env.MAX_FRAMES) : null,
+        keepIntermediateFiles: process.env.KEEP_INTERMEDIATE_FILES === 'true',
+        workDir: process.env.WORK_DIR || path.join(__dirname, 'work')
+      };
+
+      // Write a status sidecar file next to the uploaded video
+      const statusPath = path.join(uploadsDir, `${path.basename(fileInfo.filename, path.extname(fileInfo.filename))}.status.json`);
+      const status = {
+        status: 'queued',
+        videoPath: fileInfo.path,
+        taskDescription,
+        options,
+        createdAt: new Date().toISOString()
+      };
+      try {
+        fs.writeFileSync(statusPath, JSON.stringify(status, null, 2));
+      } catch (e) {
+        console.error('Failed to write status file:', e);
+      }
+
+      // Kick off processing without blocking the response
+      (async () => {
+        try {
+          const processor = new VideoProcessor(options);
+          // update status to running
+          fs.writeFileSync(statusPath, JSON.stringify({ ...status, status: 'running', startedAt: new Date().toISOString() }, null, 2));
+          const result = await processor.processVideo(fileInfo.path, taskDescription);
+          const finalStatus = {
+            ...status,
+            status: result.success ? 'completed' : 'failed',
+            startedAt: undefined,
+            completedAt: new Date().toISOString(),
+            detectionsPath: result.detectionsPath || null,
+            annotatedVideoPath: result.annotatedVideoPath || null,
+            error: result.success ? null : result.error,
+            refinedTask: result.refinedTask || taskDescription
+          };
+          fs.writeFileSync(statusPath, JSON.stringify(finalStatus, null, 2));
+          console.log('[PROCESSING DONE]', finalStatus);
+        } catch (procErr) {
+          console.error('Processing pipeline failed:', procErr);
+          try {
+            fs.writeFileSync(statusPath, JSON.stringify({ ...status, status: 'failed', error: procErr.message, completedAt: new Date().toISOString() }, null, 2));
+          } catch {}
+        }
+      })();
+    }
 
     res.json({
       message: 'Video uploaded successfully!',
-      file: fileInfo
+      file: fileInfo,
+      autoProcess: autoProcess,
+      note: autoProcess ? 'Processing started in background. Check status endpoint.' : 'Set AUTO_PROCESS=true to enable automatic processing.'
     });
   } catch (error) {
     console.error('[UPLOAD ERROR] Unexpected exception:', error);
@@ -134,6 +191,22 @@ app.get('/videos', (req, res) => {
   }
 });
 
+// Status endpoint to check processing for a given uploaded file stem
+app.get('/status/:stem', (req, res) => {
+  const stem = req.params.stem;
+  const statusPath = path.join(uploadsDir, `${stem}.status.json`);
+  try {
+    if (!fs.existsSync(statusPath)) {
+      return res.status(404).json({ error: 'Status not found', stem });
+    }
+    const data = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
+    res.json(data);
+  } catch (err) {
+    console.error('Status read error:', err);
+    res.status(500).json({ error: 'Failed to read status', details: err.message });
+  }
+});
+
 // Error handling middleware
 app.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
@@ -151,6 +224,20 @@ app.use((error, req, res, next) => {
 });
 
 app.use('/uploads', express.static(uploadsDir));
+// Also serve the work directory where annotated videos and detections are stored
+const workDirStatic = process.env.WORK_DIR || path.join(__dirname, 'work');
+app.use('/work', express.static(workDirStatic, {
+  setHeaders: (res, filePath) => {
+    // Allow cross-origin video playback from the frontend dev server
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    // Hint content type for mp4 if needed (express sets by extension, but this is safe)
+    if (filePath.toLowerCase().endsWith('.mp4')) {
+      res.setHeader('Content-Type', 'video/mp4');
+    }
+    // Disable aggressive caching while developing
+    res.setHeader('Cache-Control', 'no-cache');
+  }
+}));
 
 const server = app.listen(PORT, () => {
   // When PORT is 0, the OS assigns a free port — read it from the server instance
@@ -166,6 +253,7 @@ const server = app.listen(PORT, () => {
     console.error('Failed to write backend port file:', err);
   }
 });
+
 
 // Graceful shutdown
 const shutdown = (signal) => {

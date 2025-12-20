@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import { Video, Clock, CheckCircle2, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -10,11 +11,13 @@ interface VideoCardProps {
     thumbnail?: string;
     detectionsUrl?: string;
     statusMessage?: string;
+    stem?: string;
   };
 }
 
 export const VideoCard = ({ video }: VideoCardProps) => {
-  const { title, uploadDate, status, thumbnail, detectionsUrl, statusMessage } = video;
+  const navigate = useNavigate();
+  const { title, uploadDate, status, thumbnail, detectionsUrl, statusMessage, stem } = video;
   const statusConfig = {
     processing: {
       label: "Processing",
@@ -39,8 +42,21 @@ export const VideoCard = ({ video }: VideoCardProps) => {
   const config = statusConfig[status];
   const StatusIcon = config.icon;
 
+  const handleClick = () => {
+    if (status === "completed" && stem) {
+      navigate(`/results?stem=${encodeURIComponent(stem)}&title=${encodeURIComponent(title)}`);
+    }
+  };
+
+  const isClickable = status === "completed" && stem;
+
   return (
-    <div className="group bg-card rounded-xl overflow-hidden shadow-lg hover:shadow-2xl hover:shadow-primary/20 border border-border hover:border-primary/50 transition-all duration-300 hover:-translate-y-1">
+    <div 
+      onClick={handleClick}
+      className={cn(
+        "group bg-card rounded-xl overflow-hidden shadow-lg hover:shadow-2xl hover:shadow-primary/20 border border-border hover:border-primary/50 transition-all duration-300 hover:-translate-y-1",
+        isClickable && "cursor-pointer"
+      )}>
       <div className="relative aspect-video bg-gradient-to-br from-accent/10 to-primary/10 overflow-hidden">
         {thumbnail ? (
           <img

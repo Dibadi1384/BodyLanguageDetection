@@ -98,10 +98,24 @@ app.post('/upload', upload.single('video'), (req, res) => {
     };
 
     console.log('[UPLOAD SUCCESS] Video stored:', fileInfo);
+    
+    // Check if refined prompt was sent from frontend
+    const refinedPrompt = req.body.refinedPrompt;
+    const skipRefinement = !!refinedPrompt; // Skip refinement if refined prompt is provided
+    
+    if (refinedPrompt) {
+      console.log('[UPLOAD DEBUG] Received refined prompt from frontend:', refinedPrompt);
+    } else {
+      console.log('[UPLOAD DEBUG] No refined prompt received, will use default or refine');
+    }
+    
     // Auto-start processing pipeline asynchronously
     const autoProcess = process.env.AUTO_PROCESS !== 'false';
     if (autoProcess) {
-      const taskDescription = process.env.DEFAULT_TASK_DESCRIPTION || 'Detect people and analyze their emotions with bounding boxes.';
+      // Use refined prompt from frontend if available, otherwise use default
+      const taskDescription = refinedPrompt || process.env.DEFAULT_TASK_DESCRIPTION || 'Detect people and analyze their emotions with bounding boxes.';
+      console.log('[UPLOAD DEBUG] Using task description:', taskDescription);
+      console.log('[UPLOAD DEBUG] Will skip refinement:', skipRefinement);
       const options = {
         frameInterval: parseInt(process.env.FRAME_INTERVAL || '60'),
         batchSize: parseInt(process.env.BATCH_SIZE || '4'),
@@ -114,11 +128,19 @@ app.post('/upload', upload.single('video'), (req, res) => {
       const statusPath = path.join(uploadsDir, `${path.basename(fileInfo.filename, path.extname(fileInfo.filename))}.status.json`);
       const status = {
         status: 'queued',
+        stage: 0,
         videoPath: fileInfo.path,
         taskDescription,
+        isRefinedPrompt: skipRefinement,
+        models: {
+          promptRefinement: 'gemini-2.0-flash',
+          frameAnalysis: 'Qwen/Qwen2.5-VL-7B-Instruct'
+        },
         options,
         createdAt: new Date().toISOString()
       };
+      console.log('[UPLOAD DEBUG] Created status file:', statusPath);
+      console.log('[UPLOAD DEBUG] Models that will be used:', status.models);
       try {
         fs.writeFileSync(statusPath, JSON.stringify(status, null, 2));
       } catch (e) {
@@ -128,26 +150,74 @@ app.post('/upload', upload.single('video'), (req, res) => {
       // Kick off processing without blocking the response
       (async () => {
         try {
+          // Status update function to write status file
+          const updateStatusFile = (statusInfo) => {
+            try {
+              const currentStatus = {
+                ...status,
+                status: statusInfo.status,
+                stage: statusInfo.stage,
+                currentStage: statusInfo.action || statusInfo.status,
+                timestamp: statusInfo.timestamp,
+                models: statusInfo.models || options.models,
+                details: statusInfo
+              };
+              
+              // Preserve important fields
+              if (statusInfo.status === 'running' && !currentStatus.startedAt) {
+                currentStatus.startedAt = new Date().toISOString();
+              }
+              
+              fs.writeFileSync(statusPath, JSON.stringify(currentStatus, null, 2));
+              console.log('[STATUS UPDATE]', statusInfo.status, '- Stage', statusInfo.stage, ':', statusInfo.action);
+            } catch (e) {
+              console.error('[STATUS UPDATE ERROR]', e);
+            }
+          };
+          
+          // Add status callback to options
+          options.statusCallback = updateStatusFile;
+          
           const processor = new VideoProcessor(options);
           // update status to running
-          fs.writeFileSync(statusPath, JSON.stringify({ ...status, status: 'running', startedAt: new Date().toISOString() }, null, 2));
-          const result = await processor.processVideo(fileInfo.path, taskDescription);
+          updateStatusFile({
+            status: 'running',
+            stage: 0,
+            action: 'Video processing started',
+            timestamp: new Date().toISOString()
+          });
+          
+          console.log('[PROCESSING DEBUG] Starting video processing with task:', taskDescription);
+          console.log('[PROCESSING DEBUG] Skip refinement flag:', skipRefinement);
+          const result = await processor.processVideo(fileInfo.path, taskDescription, null, skipRefinement);
+          
           const finalStatus = {
             ...status,
             status: result.success ? 'completed' : 'failed',
-            startedAt: undefined,
+            stage: result.success ? 5 : -1,
+            startedAt: status.startedAt,
             completedAt: new Date().toISOString(),
             detectionsPath: result.detectionsPath || null,
             annotatedVideoPath: result.annotatedVideoPath || null,
             error: result.success ? null : result.error,
-            refinedTask: result.refinedTask || taskDescription
+            refinedTask: result.refinedTask || taskDescription,
+            models: result.models || {},
+            processingStages: result.processingStages || {}
           };
           fs.writeFileSync(statusPath, JSON.stringify(finalStatus, null, 2));
           console.log('[PROCESSING DONE]', finalStatus);
         } catch (procErr) {
           console.error('Processing pipeline failed:', procErr);
           try {
-            fs.writeFileSync(statusPath, JSON.stringify({ ...status, status: 'failed', error: procErr.message, completedAt: new Date().toISOString() }, null, 2));
+            const errorStatus = {
+              ...status,
+              status: 'failed',
+              stage: -1,
+              error: procErr.message,
+              errorStack: procErr.stack,
+              completedAt: new Date().toISOString()
+            };
+            fs.writeFileSync(statusPath, JSON.stringify(errorStatus, null, 2));
           } catch {}
         }
       })();

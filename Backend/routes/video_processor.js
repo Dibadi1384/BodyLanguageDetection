@@ -18,30 +18,83 @@ class VideoProcessor {
 		this.keepIntermediateFiles = options.keepIntermediateFiles || false;
 		this.skipAnnotation = options.skipAnnotation || false;
 		this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+		
+		// Model information
+		this.models = {
+			promptRefinement: "gemini-2.0-flash",  // Used for refining prompts
+			frameAnalysis: "Qwen/Qwen2.5-VL-7B-Instruct"  // Used for analyzing video frames
+		};
+		
+		// Status callback for external status updates
+		this.statusCallback = options.statusCallback || null;
+		
+		console.log("[VIDEO PROCESSOR] Initialized with workDir:", this.workDir);
+		console.log("[VIDEO PROCESSOR] Models configured:", this.models);
+	}
+	
+	/**
+	 * Update status and notify callback if available
+	 */
+	updateStatus(status, stage, details = {}) {
+		const statusInfo = {
+			status,
+			stage,
+			timestamp: new Date().toISOString(),
+			...details
+		};
+		
+		console.log(`[VIDEO PROCESSOR STATUS] ${status} - Stage ${stage}:`, details);
+		
+		if (this.statusCallback && typeof this.statusCallback === 'function') {
+			try {
+				this.statusCallback(statusInfo);
+			} catch (error) {
+				console.error("[VIDEO PROCESSOR] Status callback error:", error);
+			}
+		}
+		
+		return statusInfo;
 	}
 
 	/**
 	 * Refine task description using Gemini
 	 */
 	async refineTaskDescription(userInstruction) {
+		this.updateStatus('refining_prompt', 0, {
+			model: this.models.promptRefinement,
+			action: 'Refining prompt with Gemini'
+		});
+		
 		console.log("\n=== Refining Task with Gemini ===");
+		console.log(`Model: ${this.models.promptRefinement}`);
 		console.log(`User instruction: ${userInstruction}`);
 
 		try {
 			const model = this.genAI.getGenerativeModel({
-				model: "gemini-2.0-flash",
+				model: this.models.promptRefinement,
 			});
 			const prompt = `Take the following user instruction and rewrite it as a short, clear detection prompt that a video analysis model can understand. Focus on the importance of using bounding boxes to detect people as well as their corresponding emotions. Respond only with the rewritten prompt (no explanation):\n\nUser input: ${userInstruction}`;
 			const result = await model.generateContent(prompt);
 			const refinedPrompt = result.response.text().trim();
 
 			console.log(`Refined prompt: ${refinedPrompt}`);
+			this.updateStatus('refining_prompt', 0, {
+				model: this.models.promptRefinement,
+				action: 'Prompt refinement completed',
+				refinedPrompt
+			});
+			
 			return refinedPrompt;
 		} catch (error) {
 			console.error(
 				"Gemini refinement failed, using original instruction:",
 				error.message
 			);
+			this.updateStatus('refining_prompt', 0, {
+				model: this.models.promptRefinement,
+				action: 'Prompt refinement failed, using original',
+				error: error.message
+			});
 			return userInstruction;
 		}
 	}
@@ -51,37 +104,84 @@ class VideoProcessor {
 	 */
 	async runPythonScript(scriptPath, args = []) {
 		return new Promise((resolve, reject) => {
-			// Use virtual environment Python if it exists
-			const venvPython = path.join(
-				__dirname,
-				"..",
-				"venv",
-				"bin",
-				"python3"
-			);
-			const pythonCmd = fs.existsSync(venvPython)
-				? venvPython
-				: "python3";
+			// Detect Python command based on OS
+			const isWindows = process.platform === 'win32';
+			
+			// Try virtual environment Python first
+			let venvPython;
+			if (isWindows) {
+				// Windows: venv\Scripts\python.exe
+				venvPython = path.join(
+					__dirname,
+					"..",
+					"venv",
+					"Scripts",
+					"python.exe"
+				);
+			} else {
+				// Unix/Linux/Mac: venv/bin/python3
+				venvPython = path.join(
+					__dirname,
+					"..",
+					"venv",
+					"bin",
+					"python3"
+				);
+			}
+			
+			// Determine Python command to use
+			let pythonCmd;
+			if (fs.existsSync(venvPython)) {
+				pythonCmd = venvPython;
+				console.log(`[PYTHON] Using venv Python: ${pythonCmd}`);
+			} else {
+				// Fallback: try 'python' first (Windows), then 'python3' (Unix)
+				pythonCmd = isWindows ? "python" : "python3";
+				console.log(`[PYTHON] Using system Python: ${pythonCmd}`);
+			}
 
-			const process = spawn(pythonCmd, [scriptPath, ...args]);
+			const childProcess = spawn(pythonCmd, [scriptPath, ...args]);
 
 			let stdout = "";
 			let stderr = "";
 
-			process.stdout.on("data", (data) => {
+			childProcess.stdout.on("data", (data) => {
 				stdout += data.toString();
 			});
 
-			process.stderr.on("data", (data) => {
-				stderr += data.toString();
-				console.log(data.toString().trim());
+			childProcess.stderr.on("data", (data) => {
+				const output = data.toString();
+				stderr += output;
+				// Log stderr output (Python scripts often use stderr for status messages)
+				const lines = output.trim().split('\n');
+				lines.forEach(line => {
+					if (line.trim()) {
+						console.log(line.trim());
+					}
+				});
 			});
 
-			process.on("close", (code) => {
+			childProcess.on("error", (error) => {
+				// Handle spawn errors (e.g., Python not found)
+				if (error.code === 'ENOENT') {
+					reject(
+						new Error(
+							`Python not found. Please ensure Python is installed and available in PATH.\n` +
+							`Tried command: ${pythonCmd}\n` +
+							`On Windows, use 'python'. On Unix/Linux/Mac, use 'python3'.\n` +
+							`Original error: ${error.message}`
+						)
+					);
+				} else {
+					reject(error);
+				}
+			});
+
+			childProcess.on("close", (code) => {
 				if (code !== 0) {
 					reject(
 						new Error(
-							`Python script failed with code ${code}\n${stderr}`
+							`Python script failed with code ${code}\nCommand: ${pythonCmd}\nScript: ${scriptPath}\n${stderr}`
 						)
 					);
 				} else {
@@ -95,6 +195,13 @@ class VideoProcessor {
 	 * Step 1: Extract frames from video
 	 */
 	async extractFrames(videoPath) {
+		this.updateStatus('extracting_frames', 1, {
+			action: 'Starting frame extraction',
+			videoPath,
+			frameInterval: this.frameInterval,
+			maxFrames: this.maxFrames
+		});
+		
 		console.log("\n=== Step 1: Extracting Frames ===");
 
 		const sessionId = uuidv4().split("-")[0];
@@ -112,7 +219,6 @@ class VideoProcessor {
 			...(this.maxFrames ? [this.maxFrames.toString()] : []),
 		];
 
-
 		// Resolve python script absolute path relative to this routes folder
 		const extractorScript = path.join(__dirname, "src", "video_extractor.py");
 		const result = await this.runPythonScript(extractorScript, args);
@@ -120,12 +226,23 @@ class VideoProcessor {
 		const manifestPath = path.join(framesDir, "manifest.json");
 
 		if (!fs.existsSync(manifestPath)) {
+			this.updateStatus('extracting_frames', 1, {
+				action: 'Frame extraction failed',
+				error: 'manifest.json not found'
+			});
 			throw new Error("Frame extraction failed: manifest.json not found");
 		}
 
 		const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 
 		console.log(`Extracted ${manifest.saved_count} frames to ${framesDir}`);
+		
+		this.updateStatus('extracting_frames', 1, {
+			action: 'Frame extraction completed',
+			framesExtracted: manifest.saved_count,
+			framesDir,
+			manifestPath
+		});
 
 		return { manifestPath, framesDir, manifest };
 	}
@@ -134,7 +251,16 @@ class VideoProcessor {
 	 * Step 2: Analyze frames with vision model
 	 */
 	async analyzeFrames(manifestPath, taskDescription) {
+		this.updateStatus('analyzing_frames', 2, {
+			action: 'Starting frame analysis',
+			model: this.models.frameAnalysis,
+			taskDescription,
+			batchSize: this.batchSize
+		});
+		
 		console.log("\n=== Step 2: Analyzing Frames ===");
+		console.log(`[LLM CONNECTION] Preparing to connect to vision model: ${this.models.frameAnalysis}`);
+		console.log(`[LLM CONNECTION] Endpoint: HuggingFace Router (https://router.huggingface.co/v1)`);
 		console.log(`Task: ${taskDescription}`);
 
 		// Cap batch size to avoid oversized requests hitting router limits
@@ -142,25 +268,78 @@ class VideoProcessor {
 		const args = [manifestPath, taskDescription, safeBatchSize.toString()];
 
 		const analyzerScript = path.join(__dirname, "src", "frame_analyzer.py");
+		console.log(`[LLM CONNECTION] Calling frame analyzer script: ${analyzerScript}`);
+		console.log(`[LLM CONNECTION] Script arguments: ${args.join(', ')}`);
+		
+		// Check if HF_TOKEN is set (required for HuggingFace Router connection)
+		if (!process.env.HF_TOKEN) {
+			console.warn(`[LLM CONNECTION] ⚠ Warning: HF_TOKEN environment variable not set - connection may fail`);
+		} else {
+			console.log(`[LLM CONNECTION] ✓ HF_TOKEN environment variable is set`);
+		}
+		
+		console.log(`[LLM CONNECTION] Starting Python script execution...`);
+		console.log(`[LLM CONNECTION] Waiting for LLM connection confirmation from Python script...`);
+		
 		const result = await this.runPythonScript(analyzerScript, args);
+		
+		console.log(`[LLM CONNECTION] Python script execution completed`);
+
+		// Parse stderr for connection confirmation messages
+		if (result.stderr) {
+			const stderrLines = result.stderr.split('\n');
+			stderrLines.forEach(line => {
+				if (line.includes('Using model:') || line.includes('model:')) {
+					console.log(`[LLM CONNECTION] ✓ ${line.trim()}`);
+				}
+				if (line.includes('Fallback configured') || line.includes('Warning:')) {
+					console.log(`[LLM CONNECTION] ${line.trim()}`);
+				}
+				if (line.includes('Loaded') && line.includes('frames')) {
+					console.log(`[LLM CONNECTION] ${line.trim()}`);
+				}
+			});
+		}
 
 		// The script outputs the detections path as the last line
 		const detectionsPath = result.stdout.split("\n").pop();
 
 		if (!fs.existsSync(detectionsPath)) {
+			console.error(`[LLM CONNECTION] ✗ Connection failed: detections.json not found`);
+			this.updateStatus('analyzing_frames', 2, {
+				action: 'Frame analysis failed',
+				model: this.models.frameAnalysis,
+				error: 'detections.json not found'
+			});
 			throw new Error("Frame analysis failed: detections.json not found");
 		}
 
+		console.log(`[LLM CONNECTION] ✓ Detections file created: ${detectionsPath}`);
+		console.log(`[LLM CONNECTION] ✓ Successfully received results from vision model`);
+		
 		const detections = JSON.parse(fs.readFileSync(detectionsPath, "utf8"));
+		
+		const totalPeople = detections.frame_detections.reduce(
+			(sum, f) => sum + f.people_detected,
+			0
+		);
 
 		console.log(
-			`✓ Analyzed ${
-				detections.frame_detections.length
-			} frames, detected ${detections.frame_detections.reduce(
-				(sum, f) => sum + f.people_detected,
-				0
-			)} people total`
+			`[LLM CONNECTION] ✓ Successfully processed ${detections.frame_detections.length} frames`
 		);
+		console.log(
+			`✓ Analyzed ${detections.frame_detections.length} frames, detected ${totalPeople} people total`
+		);
+		console.log(`[LLM CONNECTION] ✓ Vision model connection and processing confirmed successful`);
+		
+		this.updateStatus('analyzing_frames', 2, {
+			action: 'Frame analysis completed',
+			model: this.models.frameAnalysis,
+			framesAnalyzed: detections.frame_detections.length,
+			totalPeopleDetected: totalPeople,
+			detectionsPath,
+			llmConnectionConfirmed: true
+		});
 
 		return { detectionsPath, detections };
 	}
@@ -169,6 +348,12 @@ class VideoProcessor {
 	 * Step 3: Create annotated video
 	 */
 	async annotateVideo(videoPath, detectionsPath, outputPath = null) {
+		this.updateStatus('annotating_video', 3, {
+			action: 'Starting video annotation',
+			videoPath,
+			detectionsPath
+		});
+		
 		console.log("\n=== Step 3: Creating Annotated Video ===");
 
 		// If no output path specified, save to work directory (not frames directory)
@@ -186,17 +371,25 @@ class VideoProcessor {
 		const annotatedVideoPath = result.stdout.split("\n").pop();
 
 		if (!fs.existsSync(annotatedVideoPath)) {
+			this.updateStatus('annotating_video', 3, {
+				action: 'Video annotation failed',
+				error: 'output video not found'
+			});
 			throw new Error("Video annotation failed: output video not found");
 		}
 
 		const stats = fs.statSync(annotatedVideoPath);
+		const fileSizeMB = (stats.size / 1024 / 1024).toFixed(2);
+		
 		console.log(
-			`Created annotated video: ${annotatedVideoPath} (${(
-				stats.size /
-				1024 /
-				1024
-			).toFixed(2)} MB)`
+			`Created annotated video: ${annotatedVideoPath} (${fileSizeMB} MB)`
 		);
+		
+		this.updateStatus('annotating_video', 3, {
+			action: 'Video annotation completed',
+			annotatedVideoPath,
+			fileSizeMB: parseFloat(fileSizeMB)
+		});
 
 		return annotatedVideoPath;
 	}
@@ -214,20 +407,37 @@ class VideoProcessor {
 	/**
 	 * Process entire video pipeline
 	 */
-	async processVideo(videoPath, taskDescription, outputPath = null) {
+	async processVideo(videoPath, taskDescription, outputPath = null, skipRefinement = false) {
+		this.updateStatus('initializing', 0, {
+			action: 'Initializing video processing pipeline',
+			videoPath,
+			taskDescription,
+			skipRefinement,
+			models: this.models
+		});
+		
 		console.log("=".repeat(60));
 		console.log("VIDEO PROCESSING PIPELINE");
 		console.log("=".repeat(60));
 		console.log(`Video: ${videoPath}`);
-		console.log(`Original Task: ${taskDescription}`);
+		console.log(`Task Description: ${taskDescription}`);
+		console.log(`Skip Refinement: ${skipRefinement}`);
 		console.log(`Frame Interval: ${this.frameInterval}`);
 		console.log(`Batch Size: ${this.batchSize}`);
+		console.log(`Models:`, this.models);
 		console.log("=".repeat(60));
 
 		try {
-			const refinedTask = await this.refineTaskDescription(
-				taskDescription
-			);
+			let refinedTask;
+			if (skipRefinement) {
+				console.log("[VIDEO PROCESSOR] Using provided prompt as-is (already refined via NLP)");
+				refinedTask = taskDescription;
+			} else {
+				console.log("[VIDEO PROCESSOR] Refining prompt with Gemini...");
+				refinedTask = await this.refineTaskDescription(
+					taskDescription
+				);
+			}
 
 			// Step 1: Extract frames
 			const { manifestPath, framesDir, manifest } =
@@ -251,9 +461,17 @@ class VideoProcessor {
 				console.log(
 					"\nSkipping video annotation (skipAnnotation=true)"
 				);
+				this.updateStatus('annotating_video', 3, {
+					action: 'Video annotation skipped',
+					reason: 'skipAnnotation flag is true'
+				});
 			}
 
 			// Cleanup
+			this.updateStatus('cleaning_up', 4, {
+				action: 'Cleaning up intermediate files',
+				framesDir
+			});
 			this.cleanup(framesDir);
 
 			console.log("\n" + "=".repeat(60));
@@ -261,10 +479,12 @@ class VideoProcessor {
 			console.log("=".repeat(60));
 			console.log(`Original Task: ${taskDescription}`);
 			console.log(`Refined Task: ${refinedTask}`);
+			console.log(`Work Directory: ${this.workDir}`);
 			console.log(`Annotated Video: ${annotatedVideoPath}`);
 			console.log(`Detections JSON: ${detectionsPath}`);
+			console.log(`[VIDEO PROCESSOR DEBUG] Results saved in work folder: ${this.workDir}`);
 
-			return {
+			const result = {
 				success: true,
 				annotatedVideoPath,
 				detectionsPath,
@@ -272,16 +492,47 @@ class VideoProcessor {
 				videoInfo: manifest,
 				originalTask: taskDescription,
 				refinedTask: refinedTask,
+				models: this.models,
+				processingStages: {
+					refinement: skipRefinement ? 'skipped' : 'completed',
+					frameExtraction: 'completed',
+					frameAnalysis: 'completed',
+					videoAnnotation: this.skipAnnotation ? 'skipped' : 'completed',
+					cleanup: 'completed'
+				}
 			};
+			
+			this.updateStatus('completed', 5, {
+				action: 'Video processing completed successfully',
+				result: {
+					annotatedVideoPath,
+					detectionsPath,
+					framesExtracted: manifest.saved_count,
+					totalPeopleDetected: detections.frame_detections.reduce(
+						(sum, f) => sum + f.people_detected,
+						0
+					)
+				}
+			});
+
+			return result;
 		} catch (error) {
 			console.error("\n" + "=".repeat(60));
 			console.error("ERROR");
 			console.error("=".repeat(60));
 			console.error(error.message);
+			console.error("Stack:", error.stack);
+
+			this.updateStatus('failed', -1, {
+				action: 'Video processing failed',
+				error: error.message,
+				stack: error.stack
+			});
 
 			return {
 				success: false,
 				error: error.message,
+				models: this.models
 			};
 		}
 	}

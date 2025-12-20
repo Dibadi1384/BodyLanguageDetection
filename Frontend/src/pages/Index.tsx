@@ -54,6 +54,14 @@ const Index = () => {
       // Create FormData for file upload
       const formData = new FormData();
       formData.append('video', file);
+      
+      // Send refined prompt if available (already refined through NLP endpoint)
+      if (improvedText) {
+        formData.append('refinedPrompt', improvedText);
+        console.log('[FRONTEND DEBUG] Sending refined prompt with video upload:', improvedText);
+      } else {
+        console.log('[FRONTEND DEBUG] No refined prompt available - video will use default prompt');
+      }
 
       // Use XMLHttpRequest for progress tracking
       const xhr = new XMLHttpRequest();

@@ -1,0 +1,21 @@
+{
+  "ignore": [
+    "work/**/*",
+    "uploads/**/*",
+    "node_modules/**/*",
+    "**/*.status.json",
+    "**/*.mp4",
+    "**/*.avi",
+    "**/*.mov",
+    "**/*.wmv",
+    "**/*.flv",
+    "**/*.webm",
+    "**/*.mkv",
+    "**/frames_*/**/*",
+    "**/*_annotated.mp4",
+    "**/detections.json"
+  ],
+  "ext": "js,json,py",
+  "verbose": true
+}
+

@@ -273,8 +273,27 @@ def annotate_video(video_path: str, detections_path: str, output_path: str,  sho
     font_small = get_font(40)
     
     # Create video writer
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    # Use 'avc1' (H.264) codec for browser compatibility
+    # Fallback to 'mp4v' if avc1 is not available, but note it's not browser-compatible
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    
+    # If avc1 fails, try H264 (alternative H.264 codec)
+    if not out.isOpened():
+        if show_progress:
+            print("Warning: avc1 codec not available, trying H264...", file=sys.stderr)
+        fourcc = cv2.VideoWriter_fourcc(*'H264')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    
+    # Final fallback to mp4v (not browser-compatible, but will work for local playback)
+    if not out.isOpened():
+        if show_progress:
+            print("Warning: H264 codec not available, using mp4v (not browser-compatible)...", file=sys.stderr)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    
+    if not out.isOpened():
+        raise ValueError(f"Could not create video writer with any available codec for: {output_path}")
     
     if show_progress:
         print(f"Creating annotated video: {output_path}", file=sys.stderr)

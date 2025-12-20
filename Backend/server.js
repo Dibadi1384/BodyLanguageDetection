@@ -116,12 +116,18 @@ app.post('/upload', upload.single('video'), (req, res) => {
       const taskDescription = refinedPrompt || process.env.DEFAULT_TASK_DESCRIPTION || 'Detect people and analyze their emotions with bounding boxes.';
       console.log('[UPLOAD DEBUG] Using task description:', taskDescription);
       console.log('[UPLOAD DEBUG] Will skip refinement:', skipRefinement);
+      // Use absolute path for workDir to ensure consistency with static file serving
+      const workDir = process.env.WORK_DIR 
+        ? path.resolve(process.env.WORK_DIR)
+        : path.resolve(__dirname, 'work');
+      console.log('[SERVER] Work directory for VideoProcessor:', workDir);
+      
       const options = {
         frameInterval: parseInt(process.env.FRAME_INTERVAL || '60'),
         batchSize: parseInt(process.env.BATCH_SIZE || '4'),
         maxFrames: process.env.MAX_FRAMES ? parseInt(process.env.MAX_FRAMES) : null,
         keepIntermediateFiles: process.env.KEEP_INTERMEDIATE_FILES === 'true',
-        workDir: process.env.WORK_DIR || path.join(__dirname, 'work')
+        workDir: workDir
       };
 
       // Write a status sidecar file next to the uploaded video
@@ -277,6 +283,41 @@ app.get('/status/:stem', (req, res) => {
   }
 });
 
+// Debug endpoint to check if work directory files are accessible
+app.get('/debug/work/:filename', (req, res) => {
+  const filename = req.params.filename;
+  const filePath = path.join(workDirStatic, filename);
+  console.log('[DEBUG] Checking file:', filePath);
+  console.log('[DEBUG] Work directory:', workDirStatic);
+  console.log('[DEBUG] File exists:', fs.existsSync(filePath));
+  
+  if (fs.existsSync(filePath)) {
+    const stats = fs.statSync(filePath);
+    res.json({
+      exists: true,
+      path: filePath,
+      size: stats.size,
+      modified: stats.mtime
+    });
+  } else {
+    // List files in work directory for debugging
+    const files = fs.existsSync(workDirStatic) 
+      ? fs.readdirSync(workDirStatic).map(f => ({
+          name: f,
+          path: path.join(workDirStatic, f),
+          exists: fs.existsSync(path.join(workDirStatic, f))
+        }))
+      : [];
+    res.status(404).json({
+      exists: false,
+      requested: filename,
+      workDir: workDirStatic,
+      workDirExists: fs.existsSync(workDirStatic),
+      availableFiles: files
+    });
+  }
+});
+
 // Error handling middleware
 app.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
@@ -295,14 +336,28 @@ app.use((error, req, res, next) => {
 
 app.use('/uploads', express.static(uploadsDir));
 // Also serve the work directory where annotated videos and detections are stored
-const workDirStatic = process.env.WORK_DIR || path.join(__dirname, 'work');
+// Use absolute path to ensure consistency with VideoProcessor
+const workDirStatic = process.env.WORK_DIR 
+  ? path.resolve(process.env.WORK_DIR)
+  : path.resolve(__dirname, 'work');
+console.log('[SERVER] Work directory for static serving:', workDirStatic);
+// Ensure work directory exists
+if (!fs.existsSync(workDirStatic)) {
+  fs.mkdirSync(workDirStatic, { recursive: true });
+  console.log('[SERVER] Created work directory:', workDirStatic);
+}
 app.use('/work', express.static(workDirStatic, {
   setHeaders: (res, filePath) => {
     // Allow cross-origin video playback from the frontend dev server
     res.setHeader('Access-Control-Allow-Origin', '*');
-    // Hint content type for mp4 if needed (express sets by extension, but this is safe)
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Range');
+    
+    // Set proper content type for mp4 files
     if (filePath.toLowerCase().endsWith('.mp4')) {
       res.setHeader('Content-Type', 'video/mp4');
+      // Enable range requests for video streaming
+      res.setHeader('Accept-Ranges', 'bytes');
     }
     // Disable aggressive caching while developing
     res.setHeader('Cache-Control', 'no-cache');

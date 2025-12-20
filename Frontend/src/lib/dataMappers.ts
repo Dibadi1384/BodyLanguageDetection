@@ -14,6 +14,7 @@ const toPublicUrl = (p?: string | null): string | undefined => {
   const apiBase = getApiBase();
   const norm = p.replace(/\\/g, '/');
   
+  // Check for absolute paths containing Backend directory structure
   const uploadsIdx = norm.indexOf('/Backend/uploads/');
   const workIdx = norm.indexOf('/Backend/work/');
   
@@ -26,8 +27,29 @@ const toPublicUrl = (p?: string | null): string | undefined => {
     return apiBase ? `${apiBase}/work/${sub}` : `/work/${sub}`;
   }
   
-  // Already relative
+  // Check for paths that might be relative to work directory (just filename)
+  // If it ends with _detections.json or _annotated.mp4, assume it's in work directory
+  if (norm.endsWith('_detections.json') || norm.endsWith('_annotated.mp4')) {
+    const filename = norm.split('/').pop() || norm.split('\\').pop() || norm;
+    return apiBase ? `${apiBase}/work/${filename}` : `/work/${filename}`;
+  }
+  
+  // Already relative paths
   if (norm.startsWith('/uploads/') || norm.startsWith('/work/')) return norm;
+  
+  // If path contains 'work' directory (case-insensitive), try to extract filename
+  const workMatch = norm.match(/[\/\\]work[\/\\]([^\/\\]+)$/i);
+  if (workMatch) {
+    return apiBase ? `${apiBase}/work/${workMatch[1]}` : `/work/${workMatch[1]}`;
+  }
+  
+  // Handle paths that might be in Backend/work but with different structure
+  // e.g., "C:\Users\...\BodyLanguageDetection\Backend\work\video-xxx_annotated.mp4"
+  const backendWorkMatch = norm.match(/[\/\\]Backend[\/\\]work[\/\\]([^\/\\]+)$/i);
+  if (backendWorkMatch) {
+    return apiBase ? `${apiBase}/work/${backendWorkMatch[1]}` : `/work/${backendWorkMatch[1]}`;
+  }
+  
   return undefined;
 };
 
@@ -128,6 +150,7 @@ export async function fetchAnalysisData(videoStem: string): Promise<FrontendAnal
   
   // First, fetch the status to get paths
   const statusUrl = apiBase ? `${apiBase}/status/${encodeURIComponent(videoStem)}` : `/status/${encodeURIComponent(videoStem)}`;
+  console.log('[fetchAnalysisData] Fetching status from:', statusUrl);
   const statusResp = await fetch(statusUrl);
   
   if (!statusResp.ok) {
@@ -135,14 +158,32 @@ export async function fetchAnalysisData(videoStem: string): Promise<FrontendAnal
   }
   
   const statusData: BackendStatusData = await statusResp.json();
+  console.log('[fetchAnalysisData] Status data:', statusData);
   
   if (statusData.status !== 'completed') {
     throw new Error(`Analysis not completed. Status: ${statusData.status}`);
   }
   
-  // Get the public URLs
+  // Debug: Print annotated video path from status
+  console.log('[fetchAnalysisData] DEBUG - Annotated video path from status:', statusData.annotatedVideoPath);
+  console.log('[fetchAnalysisData] DEBUG - Video stem used for construction:', videoStem);
+  console.log('[fetchAnalysisData] DEBUG - Expected annotated filename:', `${videoStem}_annotated.mp4`);
+  
+  // Get the public URLs - use actual paths from status, not constructed ones
   const detectionsUrl = toPublicUrl(statusData.detectionsPath);
   const annotatedVideoUrl = toPublicUrl(statusData.annotatedVideoPath);
+  
+  // Fallback: if toPublicUrl didn't work, try constructing from videoStem
+  const finalAnnotatedVideoUrl = annotatedVideoUrl || (apiBase 
+    ? `${apiBase}/work/${videoStem}_annotated.mp4`
+    : `/work/${videoStem}_annotated.mp4`);
+  
+  console.log('[fetchAnalysisData] Detections URL:', detectionsUrl);
+  console.log('[fetchAnalysisData] Annotated video URL (from status):', annotatedVideoUrl);
+  console.log('[fetchAnalysisData] Annotated video URL (final):', finalAnnotatedVideoUrl);
+  console.log('[fetchAnalysisData] Video stem:', videoStem);
+  console.log('[fetchAnalysisData] Original paths - detections:', statusData.detectionsPath);
+  console.log('[fetchAnalysisData] Annotated video path from status:', statusData.annotatedVideoPath);
   
   // Fetch the detections JSON
   if (!detectionsUrl) {
@@ -155,9 +196,20 @@ export async function fetchAnalysisData(videoStem: string): Promise<FrontendAnal
   }
   
   const detectionsData: BackendDetectionsData = await detectionsResp.json();
+  console.log('[fetchAnalysisData] Detections data loaded:', {
+    frameCount: detectionsData.frame_detections?.length || 0,
+    totalFrames: detectionsData.video_info?.total_frames || 0
+  });
   
   // Transform to frontend format
-  return transformDetectionsData(detectionsData, annotatedVideoUrl, detectionsUrl, videoStem);
+  const transformed = transformDetectionsData(detectionsData, finalAnnotatedVideoUrl, detectionsUrl, videoStem);
+  console.log('[fetchAnalysisData] Transformed data:', {
+    detectionsCount: transformed.detections.length,
+    segmentsCount: transformed.segments.length,
+    hasAnnotatedVideo: !!transformed.annotatedVideoUrl
+  });
+  
+  return transformed;
 }
 
 /**
@@ -186,23 +238,36 @@ function transformDetectionsData(
   let detectionId = 0;
   
   for (const frame of frameDetections) {
+    if (!frame || !frame.people || !Array.isArray(frame.people)) continue;
+    
+    const timestamp = frame.timestamp_s ?? 0;
+    
     for (const person of frame.people) {
+      if (!person) continue;
+      
       // Extract primary label from analysis_result
       const analysisResult = person.analysis_result || {};
-      const label = extractLabel(analysisResult) || `Person ${person.person_id}`;
-      const confidence = (person.bbox_confidence || 0) * 100;
+      const label = extractLabel(analysisResult) || `Person ${person.person_id ?? 'Unknown'}`;
+      const confidence = (person.bbox_confidence ?? 0) * 100;
+      
+      // Ensure bbox exists and has valid values
+      const bbox = person.bbox || {};
+      const xMin = bbox.x_min ?? 0;
+      const yMin = bbox.y_min ?? 0;
+      const xMax = bbox.x_max ?? 0;
+      const yMax = bbox.y_max ?? 0;
       
       detections.push({
         id: `detection-${detectionId++}`,
-        timestamp: frame.timestamp_s,
+        timestamp,
         label,
         confidence,
         duration: 1 / fps, // Duration until next frame
         boundingBox: {
-          x: person.bbox.x_min,
-          y: person.bbox.y_min,
-          width: person.bbox.x_max - person.bbox.x_min,
-          height: person.bbox.y_max - person.bbox.y_min,
+          x: xMin,
+          y: yMin,
+          width: Math.max(0, xMax - xMin),
+          height: Math.max(0, yMax - yMin),
         },
       });
     }

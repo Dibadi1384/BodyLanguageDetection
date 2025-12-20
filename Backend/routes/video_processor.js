@@ -385,6 +385,23 @@ class VideoProcessor {
 			`Created annotated video: ${annotatedVideoPath} (${fileSizeMB} MB)`
 		);
 		
+		// Try to re-encode to H.264 for browser compatibility using ffmpeg
+		// This ensures the video works in HTML5 video elements
+		try {
+			const reencodedPath = await this.reencodeToH264(annotatedVideoPath);
+			if (reencodedPath && fs.existsSync(reencodedPath)) {
+				// Replace original with re-encoded version
+				fs.unlinkSync(annotatedVideoPath);
+				fs.renameSync(reencodedPath, annotatedVideoPath);
+				const newStats = fs.statSync(annotatedVideoPath);
+				const newSizeMB = (newStats.size / 1024 / 1024).toFixed(2);
+				console.log(`Re-encoded video to H.264: ${annotatedVideoPath} (${newSizeMB} MB)`);
+			}
+		} catch (reencodeError) {
+			console.warn('Could not re-encode video to H.264 (ffmpeg may not be available):', reencodeError.message);
+			console.warn('Video may not play in browsers if codec is not browser-compatible');
+		}
+		
 		this.updateStatus('annotating_video', 3, {
 			action: 'Video annotation completed',
 			annotatedVideoPath,
@@ -392,6 +409,53 @@ class VideoProcessor {
 		});
 
 		return annotatedVideoPath;
+	}
+
+	/**
+	 * Re-encode video to H.264 for browser compatibility using ffmpeg
+	 */
+	async reencodeToH264(inputPath) {
+		const tempPath = inputPath.replace(/\.mp4$/, '_h264_temp.mp4');
+		
+		return new Promise((resolve, reject) => {
+			// Check if ffmpeg is available
+			const isWindows = process.platform === 'win32';
+			const ffmpegCmd = isWindows ? 'ffmpeg.exe' : 'ffmpeg';
+			
+			const args = [
+				'-i', inputPath,
+				'-c:v', 'libx264',           // H.264 video codec
+				'-preset', 'medium',          // Encoding speed/quality balance
+				'-crf', '23',                 // Quality (18-28, lower is better)
+				'-c:a', 'aac',                // AAC audio codec
+				'-movflags', '+faststart',    // Optimize for web streaming
+				'-y',                         // Overwrite output file
+				tempPath
+			];
+			
+			const ffmpegProcess = spawn(ffmpegCmd, args);
+			
+			let stderr = '';
+			ffmpegProcess.stderr.on('data', (data) => {
+				stderr += data.toString();
+			});
+			
+			ffmpegProcess.on('error', (error) => {
+				if (error.code === 'ENOENT') {
+					reject(new Error('ffmpeg not found. Install ffmpeg for browser-compatible video encoding.'));
+				} else {
+					reject(error);
+				}
+			});
+			
+			ffmpegProcess.on('close', (code) => {
+				if (code === 0 && fs.existsSync(tempPath)) {
+					resolve(tempPath);
+				} else {
+					reject(new Error(`ffmpeg re-encoding failed with code ${code}`));
+				}
+			});
+		});
 	}
 
 	/**

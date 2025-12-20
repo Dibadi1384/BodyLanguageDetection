@@ -20,27 +20,14 @@ import {
 } from "lucide-react";
 import { fetchAnalysisData, type FrontendAnalysisData } from "@/lib/dataMappers";
 
-interface Detection {
-  id: string;
-  timestamp: number;
-  label: string;
-  confidence: number;
-  duration: number;
-  boundingBox: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-}
-
 const Results = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [selectedDetection, setSelectedDetection] = useState<Detection | null>(null);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const [videoReady, setVideoReady] = useState(false);
 
   // Data loading state
   const [analysisData, setAnalysisData] = useState<FrontendAnalysisData | null>(null);
@@ -78,15 +65,36 @@ const Results = () => {
     loadData();
   }, [videoStem]);
 
-  const togglePlayPause = () => {
+  const togglePlayPause = async () => {
     if (!videoRef.current) return;
     
     if (isPlaying) {
       videoRef.current.pause();
+      setIsPlaying(false);
     } else {
-      videoRef.current.play();
+      try {
+        // Check if video is ready to play
+        if (videoRef.current.readyState >= 2) {
+          await videoRef.current.play();
+          setIsPlaying(true);
+        } else {
+          // Wait for video to be ready
+          videoRef.current.addEventListener('loadeddata', () => {
+            videoRef.current?.play().then(() => setIsPlaying(true)).catch(err => {
+              console.error('Error playing video:', err);
+              setVideoError('Failed to play video: ' + err.message);
+            });
+          }, { once: true });
+          // Trigger load if not already loading
+          if (videoRef.current.readyState === 0) {
+            videoRef.current.load();
+          }
+        }
+      } catch (err) {
+        console.error('Error playing video:', err);
+        setVideoError(err instanceof Error ? err.message : 'Failed to play video');
+      }
     }
-    setIsPlaying(!isPlaying);
   };
 
   const handleTimeUpdate = () => {
@@ -95,15 +103,6 @@ const Results = () => {
     }
   };
 
-  const jumpToDetection = (timestamp: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = timestamp;
-      if (!isPlaying) {
-        videoRef.current.play();
-        setIsPlaying(true);
-      }
-    }
-  };
 
   const getConfidenceColor = (confidence: number) => {
     if (confidence >= 90) return "text-green-500";
@@ -182,19 +181,82 @@ const Results = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Video Player Section */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Video with Bounding Boxes */}
+            {/* Video Player */}
             <Card className="overflow-hidden">
               <CardContent className="p-6">
                 <div className="relative bg-black rounded-lg overflow-hidden aspect-video">
                   {analysisData.annotatedVideoUrl ? (
-                    <video 
-                      ref={videoRef}
-                      src={analysisData.annotatedVideoUrl}
-                      onTimeUpdate={handleTimeUpdate}
-                      onPlay={() => setIsPlaying(true)}
-                      onPause={() => setIsPlaying(false)}
-                      className="w-full h-full object-contain"
-                    />
+                    <>
+                      <video 
+                        ref={videoRef}
+                        src={analysisData.annotatedVideoUrl}
+                        onTimeUpdate={handleTimeUpdate}
+                        onPlay={() => setIsPlaying(true)}
+                        onPause={() => setIsPlaying(false)}
+                        onLoadedData={() => {
+                          setVideoReady(true);
+                          setVideoError(null);
+                        }}
+                        onError={(e) => {
+                          const video = e.currentTarget;
+                          const error = video.error;
+                          let errorMsg = 'Failed to load video';
+                          if (error) {
+                            switch (error.code) {
+                              case error.MEDIA_ERR_ABORTED:
+                                errorMsg = 'Video loading aborted';
+                                break;
+                              case error.MEDIA_ERR_NETWORK:
+                                errorMsg = 'Network error loading video';
+                                break;
+                              case error.MEDIA_ERR_DECODE:
+                                errorMsg = 'Video decoding error';
+                                break;
+                              case error.MEDIA_ERR_SRC_NOT_SUPPORTED:
+                                errorMsg = 'Video format not supported or source not accessible';
+                                break;
+                              default:
+                                errorMsg = `Video error (code ${error.code})`;
+                            }
+                          }
+                          console.error('[Video Error]', errorMsg, {
+                            src: analysisData.annotatedVideoUrl,
+                            errorCode: error?.code,
+                            networkState: video.networkState,
+                            readyState: video.readyState
+                          });
+                          setVideoError(errorMsg);
+                          setVideoReady(false);
+                        }}
+                        onCanPlay={() => setVideoReady(true)}
+                        preload="metadata"
+                        className="w-full h-full object-contain"
+                      />
+                      {videoError && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/80">
+                          <div className="text-center p-4">
+                            <Video className="w-12 h-12 text-destructive mx-auto mb-2" />
+                            <p className="text-destructive font-medium">{videoError}</p>
+                            <p className="text-xs text-muted-foreground mt-2">
+                              URL: {analysisData.annotatedVideoUrl}
+                            </p>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="mt-4"
+                              onClick={() => {
+                                setVideoError(null);
+                                if (videoRef.current) {
+                                  videoRef.current.load();
+                                }
+                              }}
+                            >
+                              Retry
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </>
                   ) : (
                     /* Placeholder when no annotated video is available */
                     <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
@@ -204,23 +266,6 @@ const Results = () => {
                         <p className="text-xs text-muted-foreground mt-2">
                           Detection data is shown in the sidebar
                         </p>
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Bounding Box Overlay - shows when detection is selected */}
-                  {selectedDetection && (
-                    <div
-                      className="absolute border-2 border-accent shadow-lg shadow-accent/50"
-                      style={{
-                        left: `${(selectedDetection.boundingBox.x / analysisData.videoWidth) * 100}%`,
-                        top: `${(selectedDetection.boundingBox.y / analysisData.videoHeight) * 100}%`,
-                        width: `${(selectedDetection.boundingBox.width / analysisData.videoWidth) * 100}%`,
-                        height: `${(selectedDetection.boundingBox.height / analysisData.videoHeight) * 100}%`,
-                      }}
-                    >
-                      <div className="absolute -top-8 left-0 bg-accent text-accent-foreground px-2 py-1 rounded text-xs font-medium whitespace-nowrap">
-                        {selectedDetection.label} ({selectedDetection.confidence.toFixed(1)}%)
                       </div>
                     </div>
                   )}
@@ -261,27 +306,33 @@ const Results = () => {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {analysisData.segments.map((segment, index) => (
-                    <div key={index} className="flex items-center gap-4">
-                      <div className="text-sm text-muted-foreground min-w-[80px] font-mono">
-                        {segment.startTime.toFixed(1)}s - {segment.endTime.toFixed(1)}s
-                      </div>
-                      <div className="flex-1 bg-muted rounded-full h-8 relative overflow-hidden">
-                        <div
-                          className="absolute inset-y-0 left-0 bg-gradient-to-r from-cyan-500 via-purple-500 to-purple-600 transition-all"
-                          style={{ width: `${Math.min((segment.detectionCount / 10) * 100, 100)}%` }}
-                        />
-                        <div className="absolute inset-0 flex items-center px-3">
-                          <span className="text-xs font-medium text-foreground drop-shadow-sm">
-                            {segment.primaryDetection}
-                          </span>
+                  {analysisData.segments && analysisData.segments.length > 0 ? (
+                    analysisData.segments.map((segment, index) => (
+                      <div key={index} className="flex items-center gap-4">
+                        <div className="text-sm text-muted-foreground min-w-[80px] font-mono">
+                          {(segment.startTime ?? 0).toFixed(1)}s - {(segment.endTime ?? 0).toFixed(1)}s
                         </div>
+                        <div className="flex-1 bg-muted rounded-full h-8 relative overflow-hidden">
+                          <div
+                            className="absolute inset-y-0 left-0 bg-gradient-to-r from-cyan-500 via-purple-500 to-purple-600 transition-all"
+                            style={{ width: `${Math.min(((segment.detectionCount ?? 0) / 10) * 100, 100)}%` }}
+                          />
+                          <div className="absolute inset-0 flex items-center px-3">
+                            <span className="text-xs font-medium text-foreground drop-shadow-sm">
+                              {segment.primaryDetection || 'No detections'}
+                            </span>
+                          </div>
+                        </div>
+                        <Badge variant="secondary" className="min-w-[100px] justify-center">
+                          {segment.detectionCount ?? 0} detections
+                        </Badge>
                       </div>
-                      <Badge variant="secondary" className="min-w-[100px] justify-center">
-                        {segment.detectionCount} detections
-                      </Badge>
+                    ))
+                  ) : (
+                    <div className="text-center py-4 text-muted-foreground text-sm">
+                      No timeline segments available
                     </div>
-                  ))}
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -335,38 +386,45 @@ const Results = () => {
               <CardContent className="p-0">
                 <ScrollArea className="h-[500px]">
                   <div className="p-6 pt-0 space-y-3">
-                    {analysisData.detections.map((detection) => (
-                      <button
-                        key={detection.id}
-                        onClick={() => {
-                          setSelectedDetection(detection);
-                          jumpToDetection(detection.timestamp);
-                        }}
-                        className={`w-full text-left p-4 rounded-lg border transition-all hover:border-accent hover:shadow-md ${
-                          selectedDetection?.id === detection.id
-                            ? "border-accent bg-accent/10 shadow-md"
-                            : "border-border bg-card"
-                        }`}
-                      >
-                        <div className="flex items-start justify-between mb-3">
-                          <span className="font-medium text-foreground">{detection.label}</span>
-                          <Badge variant="outline" className="text-xs font-mono">
-                            {detection.timestamp.toFixed(1)}s
-                          </Badge>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
-                            <div 
-                              className={`h-full ${getProgressBarColor(detection.confidence)} transition-all`}
-                              style={{ width: `${detection.confidence}%` }}
-                            />
+                    {(() => {
+                      const validDetections = analysisData.detections.filter(
+                        (detection) => detection && detection.timestamp != null && detection.confidence != null
+                      );
+                      
+                      if (validDetections.length === 0) {
+                        return (
+                          <div className="text-center py-8 text-muted-foreground">
+                            <p>No detections found</p>
+                            <p className="text-xs mt-2">The analysis completed but no detections were generated.</p>
                           </div>
-                          <span className={`text-sm font-semibold ${getConfidenceColor(detection.confidence)}`}>
-                            {detection.confidence.toFixed(1)}%
-                          </span>
-                        </div>
-                      </button>
-                    ))}
+                        );
+                      }
+                      
+                       return validDetections.map((detection) => (
+                         <div
+                           key={detection.id}
+                           className="w-full text-left p-4 rounded-lg border border-border bg-card"
+                         >
+                          <div className="flex items-start justify-between mb-3">
+                            <span className="font-medium text-foreground">{detection.label || 'Unknown'}</span>
+                            <Badge variant="outline" className="text-xs font-mono">
+                              {(detection.timestamp ?? 0).toFixed(1)}s
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
+                              <div 
+                                className={`h-full ${getProgressBarColor(detection.confidence ?? 0)} transition-all`}
+                                style={{ width: `${detection.confidence ?? 0}%` }}
+                              />
+                            </div>
+                            <span className={`text-sm font-semibold ${getConfidenceColor(detection.confidence ?? 0)}`}>
+                              {(detection.confidence ?? 0).toFixed(1)}%
+                             </span>
+                           </div>
+                         </div>
+                       ));
+                    })()}
                   </div>
                 </ScrollArea>
               </CardContent>

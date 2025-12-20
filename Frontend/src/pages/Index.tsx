@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { VideoUploadZone } from "@/components/VideoUploadZone";
 import { UploadProgress } from "@/components/UploadProgress";
 import { VideoCard } from "@/components/VideoCard";
@@ -27,11 +28,13 @@ interface UploadedVideo {
 }
 
 const Index = () => {
+  const navigate = useNavigate();
   const [uploadingFiles, setUploadingFiles] = useState<UploadingFile[]>([]);
   const [uploadedVideos, setUploadedVideos] = useState<UploadedVideo[]>([]);
   const [detectionDescription, setDetectionDescription] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [improvedText, setImprovedText] = useState<string | null>(null);
+  const [navigatedVideos, setNavigatedVideos] = useState<Set<string>>(new Set());
 
   // Load videos from backend on component mount
   useEffect(() => {
@@ -168,6 +171,17 @@ const Index = () => {
 
                   if (status.status === 'completed') {
                     toast.success('Analysis completed!');
+                    
+                    // Auto-navigate to results page
+                    if (stem && !navigatedVideos.has(id)) {
+                      const videoTitle = file.name.replace(/\.[^/.]+$/, "");
+                      setNavigatedVideos((prev) => new Set(prev).add(id));
+                      
+                      // Small delay to ensure state updates are processed
+                      setTimeout(() => {
+                        navigate(`/results?stem=${encodeURIComponent(stem)}&title=${encodeURIComponent(videoTitle)}`);
+                      }, 500);
+                    }
                   } else {
                     toast.error(status.error || 'Analysis failed');
                   }

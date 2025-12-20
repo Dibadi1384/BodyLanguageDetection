@@ -26,42 +26,53 @@ export default defineConfig(({ mode }) => ({
 
     if (!apiTarget) apiTarget = 'http://localhost:5000';
 
+    // Helper function to create proxy config with error handling
+    const createProxyConfig = (path: string) => ({
+      target: apiTarget,
+      changeOrigin: true,
+      secure: false,
+      // Handle connection errors gracefully during backend restarts
+      configure: (proxy: any, _options: any) => {
+        proxy.on('error', (err: any, req: any, res: any) => {
+          // Only log if it's not a connection refused error (backend restarting)
+          if (err.code !== 'ECONNREFUSED') {
+            console.error(`[Vite Proxy Error] ${path}:`, err.message);
+          }
+          // Return a proper error response instead of crashing
+          if (!res.headersSent) {
+            res.writeHead(502, {
+              'Content-Type': 'application/json',
+            });
+            res.end(JSON.stringify({
+              error: 'Backend server is temporarily unavailable. Please wait a moment and try again.',
+              code: 'BACKEND_UNAVAILABLE'
+            }));
+          }
+        });
+        // Handle proxy response errors
+        proxy.on('proxyRes', (proxyRes: any, req: any, res: any) => {
+          // Log non-2xx responses for debugging (optional)
+          if (proxyRes.statusCode >= 500) {
+            console.warn(`[Vite Proxy] ${path} returned ${proxyRes.statusCode}`);
+          }
+        });
+      },
+      // Retry configuration for better resilience
+      ws: true, // Enable WebSocket proxying
+    });
+
     return {
       host: "::",
       port: 8080,
       proxy: {
         // Proxy API calls to the backend
-        "/api": {
-          target: apiTarget,
-          changeOrigin: true,
-          secure: false,
-        },
+        "/api": createProxyConfig("/api"),
         // Proxy upload and video endpoints directly
-        "/upload": {
-          target: apiTarget,
-          changeOrigin: true,
-          secure: false,
-        },
-        "/videos": {
-          target: apiTarget,
-          changeOrigin: true,
-          secure: false,
-        },
-        "/status": {
-          target: apiTarget,
-          changeOrigin: true,
-          secure: false,
-        },
-        "/uploads": {
-          target: apiTarget,
-          changeOrigin: true,
-          secure: false,
-        },
-        "/work": {
-          target: apiTarget,
-          changeOrigin: true,
-          secure: false,
-        },
+        "/upload": createProxyConfig("/upload"),
+        "/videos": createProxyConfig("/videos"),
+        "/status": createProxyConfig("/status"),
+        "/uploads": createProxyConfig("/uploads"),
+        "/work": createProxyConfig("/work"),
       },
     };
   })(),

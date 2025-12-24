@@ -5,7 +5,7 @@ import { UploadProgress } from "@/components/UploadProgress";
 import { VideoCard } from "@/components/VideoCard";
 import { AnimatedBackground } from "@/components/AnimatedBackground";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { RefreshCw, Video } from "lucide-react";
 import { toast } from "sonner";
 
@@ -36,9 +36,9 @@ const Index = () => {
   const [improvedText, setImprovedText] = useState<string | null>(null);
   const [navigatedVideos, setNavigatedVideos] = useState<Set<string>>(new Set());
 
-  // Load videos from backend on component mount
+  // Load videos from backend on component mount (silently, without error toasts)
   useEffect(() => {
-    handleRefresh();
+    handleRefresh(false); // false = silent mode, don't show error toasts
   }, []);
 
   const handleUpload = (files: File[]) => {
@@ -229,8 +229,10 @@ const Index = () => {
     });
   };
 
-  const handleRefresh = async () => {
-    toast.info("Refreshing videos...");
+  const handleRefresh = async (showToasts: boolean = true) => {
+    if (showToasts) {
+      toast.info("Refreshing videos...");
+    }
     try {
       const response = await fetch('/videos');
       if (!response.ok) {
@@ -254,10 +256,16 @@ const Index = () => {
       }));
       
       setUploadedVideos(backendVideos);
-      toast.success(`Loaded ${backendVideos.length} videos from server`);
+      if (showToasts) {
+        toast.success(`Loaded ${backendVideos.length} videos from server`);
+      }
     } catch (error) {
       console.error('Error fetching videos:', error);
-      toast.error("Failed to refresh videos from server");
+      // Only show error toast if this is a user-initiated refresh
+      // Silent failures on initial load allow navigation to work even if backend is down
+      if (showToasts) {
+        toast.error("Failed to refresh videos from server");
+      }
     }
   };
 
@@ -266,19 +274,10 @@ const Index = () => {
       <AnimatedBackground />
       <div className="container mx-auto px-4 py-12 max-w-7xl relative z-10">
         {/* Header */}
-        <div className="text-center mb-12">
-          <div className="inline-flex items-center gap-3 mb-6">
-            <div className="p-3 rounded-xl bg-gradient-to-br from-accent to-primary shadow-lg shadow-primary/30">
-              <Video className="w-8 h-8 text-primary-foreground" />
-            </div>
-          </div>
+        <div className="text-center mb-12 relative z-20">
           <h1 className="text-6xl font-bold mb-6 bg-gradient-to-r from-accent via-primary to-accent bg-clip-text text-transparent animate-in" style={{ backgroundSize: "200% auto", animation: "gradient 3s linear infinite" }}>
-            Video Upload Center
+            Body Language Detection
           </h1>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-            Upload your videos for AI-powered analysis. Our advanced models will
-            generate action tasks and analyze body language.
-          </p>
         </div>
 
         {/* Detection Description */}
@@ -286,63 +285,59 @@ const Index = () => {
           <label htmlFor="detection-description" className="block text-sm font-medium text-foreground mb-2">
             What would you like to detect?
           </label>
-          <div className="space-y-4">
-            <Textarea
+          <div className="flex gap-4 items-center">
+            <Input
               id="detection-description"
-              placeholder="Specify the body language, gestures, or behaviors you want to analyze. For example: 'Detect hand gestures and facial expressions during presentations', 'Identify posture changes and body positioning', 'Track eye contact patterns and head movements'..."
+              placeholder="Specify the body language, gestures, or behaviors you want to analyze."
               value={detectionDescription}
               onChange={(e) => setDetectionDescription(e.target.value)}
-              className="min-h-[100px] resize-none"
+              className="flex-1 max-w-2xl"
             />
-            <div className="flex justify-end">
-              <Button
-                onClick={async () => {
-                  if (!detectionDescription.trim()) {
-                    toast.error("Please describe what you want to detect");
-                    return;
+            <Button
+              onClick={async () => {
+                if (!detectionDescription.trim()) {
+                  toast.error("Please describe what you want to detect");
+                  return;
+                }
+
+                setIsSaving(true);
+                setImprovedText(null);
+
+                // Prefer Vite env variable. If not set, use a relative `/api` path so
+                // the Vite dev server proxy can forward requests to the backend.
+                const viteApi = ((import.meta as any).env?.VITE_API_URL as string) || '';
+                const apiUrl = viteApi ? `${viteApi.replace(/\/$/, '')}/api/nlp` : '/api/nlp';
+
+                try {
+                  const resp = await fetch(apiUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text: detectionDescription }),
+                  });
+
+                  if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    throw new Error(err.error || `Server responded ${resp.status}`);
                   }
 
-                  setIsSaving(true);
-                  setImprovedText(null);
-
-                  // Prefer Vite env variable. If not set, use a relative `/api` path so
-                  // the Vite dev server proxy can forward requests to the backend.
-                  const viteApi = ((import.meta as any).env?.VITE_API_URL as string) || '';
-                  const apiUrl = viteApi ? `${viteApi.replace(/\/$/, '')}/api/nlp` : '/api/nlp';
-
-                  try {
-                    const resp = await fetch(apiUrl, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ text: detectionDescription }),
-                    });
-
-                    if (!resp.ok) {
-                      const err = await resp.json().catch(() => ({}));
-                      throw new Error(err.error || `Server responded ${resp.status}`);
-                    }
-
-                    const data = await resp.json();
-                    if (data && data.improved) {
-                      setImprovedText(data.improved.trim());
-                      toast.success("Detection preferences saved and rewritten text received!");
-                    } else {
-                      throw new Error("Invalid response from NLP API");
-                    }
-                  } catch (e: any) {
-                    console.error("NLP request failed:", e);
-                    toast.error(e.message || "Failed to save detection settings");
-                  } finally {
-                    setIsSaving(false);
+                  const data = await resp.json();
+                  if (data && data.improved) {
+                    setImprovedText(data.improved.trim());
+                    toast.success("Detection preferences saved and rewritten text received!");
+                  } else {
+                    throw new Error("Invalid response from NLP API");
                   }
-                }}
-                className="gap-2"
-                disabled={isSaving}
-              >
-                <Video className="w-4 h-4" />
-                {isSaving ? "Saving..." : "Save Detection Settings"}
-              </Button>
-            </div>
+                } catch (e: any) {
+                  console.error("NLP request failed:", e);
+                  toast.error(e.message || "Failed to save detection settings");
+                } finally {
+                  setIsSaving(false);
+                }
+              }}
+              disabled={isSaving}
+            >
+              {isSaving ? "Saving..." : "Save Detection Settings"}
+            </Button>
           </div>
         </div>
 
@@ -389,7 +384,7 @@ const Index = () => {
             <Button
               variant="outline"
               size="sm"
-              onClick={handleRefresh}
+              onClick={() => handleRefresh(true)}
               className="gap-2"
             >
               <RefreshCw className="w-4 h-4" />

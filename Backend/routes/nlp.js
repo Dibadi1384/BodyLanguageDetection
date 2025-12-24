@@ -16,7 +16,7 @@ router.post("/", async (req, res) => {
 	try {
 		console.log("[NLP DEBUG] Calling Gemini to refine prompt...");
 		const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-		const prompt = `Take the following user instruction and rewrite it as a short, clear detection prompt that a video analysis model can understand. Focus on the importance of using bounding boxes to detect people as well as their corresponding emotions. Respond only with the rewritten prompt (no explanation):\n\nUser input: ${text}`;
+		const prompt = `Take the following user instruction and rewrite it as a short, clear detection prompt that a video analysis model can understand. Focus on the importance of using bounding boxes for the people detected who correspond to the instruction. Respond only with the rewritten prompt (no explanation):\n\nUser input: ${text}`;
 		const result = await model.generateContent(prompt);
 		const detectionPrompt = result.response.text().trim();
 		console.log("[NLP DEBUG] Refined prompt received from Gemini:", detectionPrompt);

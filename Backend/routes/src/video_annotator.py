@@ -9,130 +9,148 @@ from PIL import Image, ImageDraw, ImageFont
 
 COLORS = [
     (88, 214, 141),   # Green
-    (52, 152, 219),   #  Blue
-    (231, 76, 60),    #  Red
-    (155, 89, 182),   #  Purple
-    (241, 196, 15),   #  Yellow
-    (230, 126, 34),   #  Orange
+    (52, 152, 219),   # Blue
+    (231, 76, 60),    # Red
+    (155, 89, 182),   # Purple
+    (241, 196, 15),   # Yellow
+    (230, 126, 34),   # Orange
     (26, 188, 156),   # Turquoise
 ]
 
-def draw_rounded_rectangle(draw, bbox, color, radius=10, width=3):
-    x1, y1, x2, y2 = bbox
-    draw.rounded_rectangle(
-        [x1, y1, x2, y2],
-        radius=radius,
-        outline=color,
-        width=width
-    )
-
-def draw_text_with_stroke(draw, position, text, font, text_color=(255, 255, 255, 255), stroke_color=(0, 0, 0, 255), stroke_width=3):
-    x, y = position
-    # Draw stroke by drawing text in multiple positions around the main position
-    for offset_x in range(-stroke_width, stroke_width + 1):
-        for offset_y in range(-stroke_width, stroke_width + 1):
-            if offset_x != 0 or offset_y != 0:
-                draw.text((x + offset_x, y + offset_y), text, fill=stroke_color, font=font)
-    
-    # Draw main text on top
-    draw.text((x, y), text, fill=text_color, font=font)
-
-def draw_label_badge(draw, position, text, color, font, padding=28, radius=16):
-    """Draw a simple label with text and stroke"""
-    x, y = position
-    
-    # Get text size
-    bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-    
-    # Badge dimensions
-    badge_width = text_width + padding * 2
-    badge_height = text_height + padding
-    
-    # Simple semi-transparent background for slight contrast
-    badge_color = (*color, 215)
-    draw.rounded_rectangle(
-        [x, y, x + badge_width, y + badge_height],
-        radius=radius,
-        fill=badge_color
-    )
-    
-    # Text with stroke for visibility
-    text_x = x + padding
-    text_y = y + padding // 2
-    draw_text_with_stroke(draw, (text_x, text_y), text, font, 
-                          text_color=(255, 255, 255, 255), 
-                          stroke_color=(0, 0, 0, 255), 
-                          stroke_width=4)
-    
-    return badge_width, badge_height
-
-# unused
-def draw_id_badge(draw, position, person_id, color, font_small):
-    x, y = position
-    radius = 35
-
-    shadow_offset = 6
-    draw.ellipse(
-        [x + shadow_offset, y + shadow_offset, 
-         x + 2*radius + shadow_offset, y + 2*radius + shadow_offset],
-        fill=(0, 0, 0, 150)
-    )
-    draw.ellipse(
-        [x, y, x + 2*radius, y + 2*radius],
-        fill=(20, 20, 20, 250)
-    )
-    draw.ellipse(
-        [x, y, x + 2*radius, y + 2*radius],
-        outline=(*color, 255),
-        width=5
-    )
-    id_text = str(person_id)
-    bbox = draw.textbbox((0, 0), id_text, font=font_small)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-    
-    text_x = x + radius - text_width // 2
-    text_y = y + radius - text_height // 2 - 2
-    
-    draw_text_with_stroke(draw, (text_x, text_y), id_text, font_small, stroke_width=2)
-
 def get_font(size=20):
-    # Load Inter font with system font as backup
-
+    """Load Inter font with system font as backup."""
     script_dir = Path(__file__).parent
     font_path = script_dir / "Inter-SemiBold.ttf"
     
     if font_path.exists():
         try:
-            font = ImageFont.truetype(str(font_path), size)
-            return font
-        except Exception as e:
+            return ImageFont.truetype(str(font_path), size)
+        except Exception:
             pass
     
+    # Try system fonts
     system_fonts = [
         "/System/Library/Fonts/Helvetica.ttc",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "C:/Windows/Fonts/arial.ttf",  # Windows
+        "C:/Windows/Fonts/arialbd.ttf",  # Windows Bold
     ]
     
     for font_path_str in system_fonts:
         try:
-            font = ImageFont.truetype(font_path_str, size)
-            return font
+            return ImageFont.truetype(font_path_str, size)
         except:
             continue
     
     return ImageFont.load_default()
 
-def draw_detection(
-    frame, 
-    person: Dict, 
-    color: Tuple[int, int, int] = (88, 214, 141),
-    font_main=None,
-    font_small=None
+def extract_label_from_analysis(analysis_result: Dict) -> str:
+    """Extract a human-readable label from analysis_result."""
+    if not analysis_result or not isinstance(analysis_result, dict):
+        return 'Unknown'
+    
+    # Check for common fields in priority order
+    if 'emotion' in analysis_result and analysis_result['emotion']:
+        return str(analysis_result['emotion']).capitalize()
+    
+    if 'action' in analysis_result and analysis_result['action']:
+        return str(analysis_result['action']).capitalize()
+    
+    if 'pose' in analysis_result and analysis_result['pose']:
+        return str(analysis_result['pose']).capitalize()
+    
+    if 'expression' in analysis_result and analysis_result['expression']:
+        return str(analysis_result['expression']).capitalize()
+    
+    # Try to find any key with a string value
+    for key, value in analysis_result.items():
+        if isinstance(value, str) and value and key not in ('confidence', 'intensity'):
+            return value.capitalize()
+    
+    return 'Unknown'
+
+def draw_text_badge_above_bbox(
+    draw: ImageDraw.Draw,
+    text: str,
+    bbox_coords: Tuple[int, int, int, int],
+    text_color: Tuple[int, int, int] = (255, 255, 255),
+    bg_color: Tuple[int, int, int, int] = (0, 0, 0, 200),
+    stroke_color: Tuple[int, int, int] = (0, 0, 0),
+    stroke_width: int = 2
 ):
+    """
+    Draw text badge centered above the top of a bounding box.
+    Font size is calculated as a reasonable percentage of the bounding box size.
+    """
+    x_min, y_min, x_max, y_max = bbox_coords
+    bbox_width = x_max - x_min
+    bbox_height = y_max - y_min
+    
+    # Calculate font size as percentage of bounding box (use smaller dimension)
+    bbox_min_dim = min(bbox_width, bbox_height)
+    # Use 10% of the smaller dimension for font size - reasonable and readable
+    font_size = max(16, int(bbox_min_dim * 0.10))
+    
+    # Load font with calculated size
+    font = get_font(font_size)
+    
+    # Get text bounding box
+    text_bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = text_bbox[2] - text_bbox[0]
+    text_height = text_bbox[3] - text_bbox[1]
+    
+    # Calculate padding for badge (proportional to font size)
+    padding_x = max(8, int(font_size * 0.3))
+    padding_y = max(6, int(font_size * 0.2))
+    
+    # Badge dimensions
+    badge_width = text_width + padding_x * 2
+    badge_height = text_height + padding_y * 2
+    
+    # Calculate center position above bounding box
+    center_x = (x_min + x_max) // 2
+    
+    # Position badge above the top edge of bounding box
+    badge_x = center_x - badge_width // 2
+    badge_y = y_min - badge_height  # Position above the top edge
+    
+    # Ensure badge doesn't go above frame (minimum y position)
+    if badge_y < 0:
+        badge_y = 0
+    
+    # Draw rounded rectangle background for badge
+    radius = max(4, int(font_size * 0.15))
+    draw.rounded_rectangle(
+        [badge_x, badge_y, badge_x + badge_width, badge_y + badge_height],
+        radius=radius,
+        fill=bg_color
+    )
+    
+    # Calculate text position (centered in badge)
+    text_x = badge_x + padding_x
+    text_y = badge_y + padding_y
+    
+    # Draw text with stroke for visibility
+    # Draw stroke (outline) first
+    for dx in range(-stroke_width, stroke_width + 1):
+        for dy in range(-stroke_width, stroke_width + 1):
+            if dx != 0 or dy != 0:
+                draw.text((text_x + dx, text_y + dy), text, fill=stroke_color, font=font)
+    
+    # Draw main text on top
+    draw.text((text_x, text_y), text, fill=text_color, font=font)
+
+def draw_detection(
+    frame: np.ndarray,
+    person: Dict,
+    color: Tuple[int, int, int] = (88, 214, 141),
+    bbox_line_width: int = 6
+):
+    """
+    Draw bounding box and text badge for a detected person.
+    Text badge is positioned at the top center, above the bounding box.
+    """
     # Convert BGR to RGB for PIL
     color_rgb = (color[2], color[1], color[0])
     
@@ -140,40 +158,50 @@ def draw_detection(
     x_min, y_min = bbox['x_min'], bbox['y_min']
     x_max, y_max = bbox['x_max'], bbox['y_max']
     
-    person_id = person['person_id']
-    confidence = person['bbox_confidence']
-    
+    # Extract label from analysis
     analysis = person.get('analysis_result', {})
-    emotion = analysis.get('emotion', 'unknown').capitalize()
-    analysis_confidence = analysis.get('confidence', 0)
-    conf_percent = int(analysis_confidence * 100)
+    label = extract_label_from_analysis(analysis)
     
-    # label = f"{emotion} | {conf_percent}%" # Only label for now 
-    label = f"{emotion}"
-    
-
+    # Convert frame to PIL Image
     frame_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(frame_pil, 'RGBA')
-
-    draw_rounded_rectangle(draw, (x_min, y_min, x_max, y_max), color_rgb, radius=18, width=6)
     
-    label_y = max(y_min - 110, 10)
-    draw_label_badge(draw, (x_min, label_y), label, color_rgb, font_main)
+    # Draw bounding box with rounded corners
+    bbox_coords = (x_min, y_min, x_max, y_max)
+    radius = 18
+    draw.rounded_rectangle(
+        bbox_coords,
+        radius=radius,
+        outline=color_rgb,
+        width=bbox_line_width
+    )
     
+    # Draw text badge above bounding box (top center)
+    draw_text_badge_above_bbox(
+        draw=draw,
+        text=label,
+        bbox_coords=bbox_coords,
+        text_color=(255, 255, 255),
+        bg_color=(*color_rgb, 200),  # Semi-transparent background matching box color
+        stroke_color=(0, 0, 0),
+        stroke_width=2
+    )
+    
+    # Convert back to OpenCV format
     frame_cv = cv2.cvtColor(np.array(frame_pil), cv2.COLOR_RGB2BGR)
     frame[:] = frame_cv
 
-# Interpolated bbox dict 
-def interpolate_bbox(bbox1, bbox2, alpha):
-
+def interpolate_bbox(bbox1: Dict, bbox2: Dict, alpha: float) -> Dict:
+    """Interpolate between two bounding boxes."""
     return {
         'x_min': int(bbox1['x_min'] * (1 - alpha) + bbox2['x_min'] * alpha),
         'y_min': int(bbox1['y_min'] * (1 - alpha) + bbox2['y_min'] * alpha),
         'x_max': int(bbox1['x_max'] * (1 - alpha) + bbox2['x_max'] * alpha),
         'y_max': int(bbox1['y_max'] * (1 - alpha) + bbox2['y_max'] * alpha),
     }
-# Dict mapping person_id to list of (frame_idx, person_data) tuples
-def build_person_timelines(frame_detections):
+
+def build_person_timelines(frame_detections: Dict) -> Dict:
+    """Build timelines for each person across frames."""
     timelines = {}
     
     for frame_idx, detection in frame_detections.items():
@@ -188,8 +216,8 @@ def build_person_timelines(frame_detections):
     
     return timelines
 
-def get_interpolated_person_data(person_id, frame_idx, timelines, max_gap=90):
-    
+def get_interpolated_person_data(person_id: int, frame_idx: int, timelines: Dict, max_gap: int = 90) -> Dict:
+    """Get person data for a frame, with interpolation if needed."""
     if person_id not in timelines:
         return None
     
@@ -220,11 +248,8 @@ def get_interpolated_person_data(person_id, frame_idx, timelines, max_gap=90):
         # Only interpolate if gap is reasonable
         if frame_gap <= max_gap:
             alpha = (frame_idx - prev_frame) / frame_gap
-            
-            # Create interpolated person data
             interpolated = prev_data.copy()
             interpolated['bbox'] = interpolate_bbox(prev_data['bbox'], next_data['bbox'], alpha)
-            
             return interpolated
     
     # If only prev and it's recent enough, use it
@@ -241,7 +266,8 @@ def get_interpolated_person_data(person_id, frame_idx, timelines, max_gap=90):
     
     return None
 
-def annotate_video(video_path: str, detections_path: str, output_path: str,  show_progress: bool = True) -> str:     
+def annotate_video(video_path: str, detections_path: str, output_path: str, show_progress: bool = True) -> str:
+    """Annotate video with bounding boxes and centered text labels."""
     # Load detections
     with open(detections_path, 'r') as f:
         data = json.load(f)
@@ -263,41 +289,43 @@ def annotate_video(video_path: str, detections_path: str, output_path: str,  sho
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError(f"Could not open video: {video_path}")
-
+    
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    # Load fonts and size
-    font_main = get_font(85)
-    font_small = get_font(40)
+    if show_progress:
+        print(f"Video resolution: {width}x{height}", file=sys.stderr)
+        print(f"Total frames: {total_frames}", file=sys.stderr)
+    
+    # Calculate bounding box line width based on resolution (keep it reasonable)
+    scale_factor = height / 720.0
+    bbox_line_width = max(4, int(6 * scale_factor))
+    
+    if show_progress:
+        print(f"Bounding box line width: {bbox_line_width}px", file=sys.stderr)
     
     # Create video writer
-    # Use 'avc1' (H.264) codec for browser compatibility
-    # Fallback to 'mp4v' if avc1 is not available, but note it's not browser-compatible
     fourcc = cv2.VideoWriter_fourcc(*'avc1')
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     
-    # If avc1 fails, try H264 (alternative H.264 codec)
     if not out.isOpened():
         if show_progress:
             print("Warning: avc1 codec not available, trying H264...", file=sys.stderr)
         fourcc = cv2.VideoWriter_fourcc(*'H264')
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     
-    # Final fallback to mp4v (not browser-compatible, but will work for local playback)
     if not out.isOpened():
         if show_progress:
-            print("Warning: H264 codec not available, using mp4v (not browser-compatible)...", file=sys.stderr)
+            print("Warning: H264 codec not available, using mp4v...", file=sys.stderr)
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     
     if not out.isOpened():
-        raise ValueError(f"Could not create video writer with any available codec for: {output_path}")
+        raise ValueError(f"Could not create video writer for: {output_path}")
     
     if show_progress:
         print(f"Creating annotated video: {output_path}", file=sys.stderr)
-        print(f"Resolution: {width}x{height}", file=sys.stderr)
     
     # Build person timelines for tracking
     person_timelines = build_person_timelines(frame_detections)
@@ -328,9 +356,9 @@ def annotate_video(video_path: str, detections_path: str, output_path: str,  sho
                 color_idx = person_id % len(COLORS)
                 color = COLORS[color_idx]
                 
-                draw_detection(frame, person_data, color=color, font_main=font_main, font_small=font_small)
+                draw_detection(frame, person_data, color=color, bbox_line_width=bbox_line_width)
                 annotations_per_person[person_id] += 1
-            
+        
         out.write(frame)
         
         if show_progress and frame_idx % 100 == 0:

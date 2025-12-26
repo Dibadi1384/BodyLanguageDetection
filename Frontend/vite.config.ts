@@ -71,6 +71,7 @@ export default defineConfig(({ mode }) => ({
         "/upload": createProxyConfig("/upload"),
         "/videos": createProxyConfig("/videos"),
         "/status": createProxyConfig("/status"),
+        "/thumbnail": createProxyConfig("/thumbnail"),
         "/uploads": createProxyConfig("/uploads"),
         "/work": createProxyConfig("/work"),
       },

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Video, Clock, CheckCircle2, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +19,7 @@ interface VideoCardProps {
 export const VideoCard = ({ video }: VideoCardProps) => {
   const navigate = useNavigate();
   const { title, uploadDate, status, thumbnail, detectionsUrl, statusMessage, stem } = video;
+  const [thumbnailError, setThumbnailError] = useState(false);
   const statusConfig = {
     processing: {
       label: "Processing",
@@ -39,7 +41,12 @@ export const VideoCard = ({ video }: VideoCardProps) => {
     },
   };
 
-  const config = statusConfig[status];
+  // If statusMessage contains "Annotating", show "Annotating" label instead of "Analyzing"
+  const isAnnotating = statusMessage?.toLowerCase().includes('annotating');
+  const config = {
+    ...statusConfig[status],
+    label: isAnnotating && status === 'analyzing' ? 'Annotating' : statusConfig[status].label
+  };
   const StatusIcon = config.icon;
 
   const handleClick = () => {
@@ -49,6 +56,7 @@ export const VideoCard = ({ video }: VideoCardProps) => {
   };
 
   const isClickable = status === "completed" && stem;
+  const isProcessing = status === "processing" || status === "analyzing";
 
   return (
     <div 
@@ -57,12 +65,16 @@ export const VideoCard = ({ video }: VideoCardProps) => {
         "group bg-card rounded-xl overflow-hidden shadow-lg hover:shadow-2xl hover:shadow-primary/20 border border-border hover:border-primary/50 transition-all duration-300 hover:-translate-y-1",
         isClickable && "cursor-pointer"
       )}>
-      <div className="relative aspect-video bg-gradient-to-br from-accent/10 to-primary/10 overflow-hidden">
-        {thumbnail ? (
+      <div className={cn(
+        "relative bg-gradient-to-br from-accent/10 to-primary/10 overflow-hidden",
+        isProcessing ? "h-32" : "aspect-video"
+      )}>
+        {thumbnail && !thumbnailError ? (
           <img
             src={thumbnail}
             alt={title}
             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
+            onError={() => setThumbnailError(true)}
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">

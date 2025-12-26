@@ -6,8 +6,9 @@ import { VideoCard } from "@/components/VideoCard";
 import { AnimatedBackground } from "@/components/AnimatedBackground";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { RefreshCw, Video } from "lucide-react";
+import { RefreshCw, Video, Folder } from "lucide-react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 interface UploadingFile {
   id: string;
@@ -25,7 +26,70 @@ interface UploadedVideo {
   detectionsUrl?: string;
   stem?: string;
   statusMessage?: string;
+  description?: string;
 }
+
+// Helper function to format status message from status object
+const formatStatusMessage = (status: any): string => {
+  if (!status) return "Processing...";
+  
+  // The status object from backend has details containing the actual statusInfo
+  const details = status.details || {};
+  const stage = details.stage !== undefined ? details.stage : status.stage;
+  const action = details.action || status.action || "";
+  const statusType = details.status || status.status || "";
+  
+  // Stage 0: Refining prompt
+  if (stage === 0 || statusType === 'refining_prompt') {
+    return "Refining detection prompt...";
+  }
+  
+  // Stage 1: Extracting frames
+  if (stage === 1 || statusType === 'extracting_frames') {
+    const framesExtracted = details.framesExtracted !== undefined ? details.framesExtracted : (status.framesExtracted !== undefined ? status.framesExtracted : null);
+    if (framesExtracted !== null && framesExtracted !== undefined) {
+      return `Extracting frames: ${framesExtracted} frames`;
+    }
+    return "Extracting video frames...";
+  }
+  
+  // Stage 2: Analyzing frames (LLM Detection)
+  if (stage === 2 || statusType === 'analyzing_frames') {
+    const framesAnalyzed = details.framesAnalyzed !== undefined ? details.framesAnalyzed : (status.framesAnalyzed !== undefined ? status.framesAnalyzed : null);
+    const framesExtracted = details.framesExtracted !== undefined ? details.framesExtracted : (status.framesExtracted !== undefined ? status.framesExtracted : null);
+    
+    if (framesAnalyzed !== null && framesAnalyzed !== undefined && framesExtracted !== null && framesExtracted !== undefined) {
+      const percentage = Math.min(100, Math.round((framesAnalyzed / framesExtracted) * 100));
+      return `LLM Detection ${percentage}%...`;
+    } else if (framesAnalyzed !== null && framesAnalyzed !== undefined) {
+      return `LLM Detection: ${framesAnalyzed} frames...`;
+    }
+    return "LLM Detection in progress...";
+  }
+  
+  // Stage 3: Annotating video
+  if (stage === 3 || statusType === 'annotating_video') {
+    // Check for progress information from backend (frameIdx, totalFrames, percentage)
+    const frameIdx = details.frameIdx !== undefined ? details.frameIdx : (status.frameIdx !== undefined ? status.frameIdx : null);
+    const totalFrames = details.totalFrames !== undefined ? details.totalFrames : (status.totalFrames !== undefined ? status.totalFrames : null);
+    const percentage = details.percentage !== undefined ? details.percentage : (status.percentage !== undefined ? status.percentage : null);
+    
+    if (percentage !== null && percentage !== undefined) {
+      // Use actual percentage from backend progress
+      return `Annotating Video Frames ${Math.round(percentage)}%...`;
+    } else if (frameIdx !== null && totalFrames !== null && totalFrames !== undefined) {
+      // Calculate percentage from frame counts
+      const calcPercentage = Math.min(100, Math.round((frameIdx / totalFrames) * 100));
+      return `Annotating Video Frames ${calcPercentage}%...`;
+    } else if (action.includes('completed')) {
+      return `Annotating Video Frames 100%...`;
+    }
+    return "Annotating video frames...";
+  }
+  
+  // Fallback to action or status
+  return action || statusType || "Processing...";
+};
 
 const Index = () => {
   const navigate = useNavigate();
@@ -36,10 +100,8 @@ const Index = () => {
   const [improvedText, setImprovedText] = useState<string | null>(null);
   const [navigatedVideos, setNavigatedVideos] = useState<Set<string>>(new Set());
 
-  // Load videos from backend on component mount (silently, without error toasts)
-  useEffect(() => {
-    handleRefresh(false); // false = silent mode, don't show error toasts
-  }, []);
+  // Note: We don't load all videos on mount anymore since we only show processing videos
+  // The My Detections page will handle showing all completed videos
 
   const handleUpload = (files: File[]) => {
     files.forEach((file) => {
@@ -103,9 +165,17 @@ const Index = () => {
             const uploadedFilename: string = response?.file?.filename || file.name;
             const stem = uploadedFilename.replace(/\.[^/.]+$/, "");
 
+            // Use detectionDescription (original user input) as title, otherwise use filename
+            const videoTitle = detectionDescription || file.name.replace(/\.[^/.]+$/, "");
+            
+            // Store description in localStorage keyed by stem for use in My Detections
+            if (videoTitle) {
+              localStorage.setItem(`video_desc_${stem}`, videoTitle);
+            }
+            
             const newVideo: UploadedVideo = {
               id,
-              title: file.name.replace(/\.[^/.]+$/, ""),
+              title: videoTitle,
               uploadDate: new Date().toLocaleDateString("en-US", {
                 month: "short",
                 day: "numeric",
@@ -113,7 +183,8 @@ const Index = () => {
               }),
               status: "analyzing",
               stem,
-              statusMessage: "Starting analysis...",
+              statusMessage: "Processing...",
+              description: videoTitle,
             };
             setUploadedVideos((prev) => [newVideo, ...prev]);
             setUploadingFiles((prev) => prev.filter((upload) => upload.id !== id));
@@ -158,23 +229,17 @@ const Index = () => {
                   const annotatedUrl = undefined;
                   const detectionsUrl = toPublicUrl(status.detectionsPath);
 
-                  setUploadedVideos((prev) => prev.map((v) => (
-                    v.id === id
-                      ? {
-                          ...v,
-                          status: status.status === 'completed' ? 'completed' : 'processing',
-                          detectionsUrl,
-                          statusMessage: status.status === 'completed' ? 'Completed' : (status.error || 'Analysis failed'),
-                        }
-                      : v
-                  )));
-
                   if (status.status === 'completed') {
                     toast.success('Analysis completed!');
                     
+                    // Remove completed video from processing list
+                    setUploadedVideos((prev) => prev.filter((v) => v.id !== id));
+                    
                     // Auto-navigate to results page
                     if (stem && !navigatedVideos.has(id)) {
-                      const videoTitle = file.name.replace(/\.[^/.]+$/, "");
+                      // Get the stored description or use filename as fallback
+                      const storedDesc = localStorage.getItem(`video_desc_${stem}`);
+                      const videoTitle = storedDesc || file.name.replace(/\.[^/.]+$/, "");
                       setNavigatedVideos((prev) => new Set(prev).add(id));
                       
                       // Small delay to ensure state updates are processed
@@ -182,14 +247,31 @@ const Index = () => {
                         navigate(`/results?stem=${encodeURIComponent(stem)}&title=${encodeURIComponent(videoTitle)}`);
                       }, 500);
                     }
-                  } else {
+                  } else if (status.status === 'failed') {
+                    // Keep failed videos in the list but update their status
+                    setUploadedVideos((prev) => prev.map((v) => (
+                      v.id === id
+                        ? {
+                            ...v,
+                            status: 'processing',
+                            detectionsUrl,
+                            statusMessage: status.error || 'Analysis failed',
+                          }
+                        : v
+                    )));
                     toast.error(status.error || 'Analysis failed');
                   }
                 }
-                else if (status.status === 'running' || status.status === 'queued') {
+                else {
+                  // For running, queued, or any other status, format and update the message
+                  const statusMsg = formatStatusMessage(status);
                   setUploadedVideos((prev) => prev.map((v) => (
                     v.id === id
-                      ? { ...v, status: status.status === 'running' ? 'analyzing' : 'processing', statusMessage: status.status }
+                      ? { 
+                          ...v, 
+                          status: status.status === 'running' ? 'analyzing' : (status.status === 'queued' ? 'processing' : v.status), 
+                          statusMessage: statusMsg 
+                        }
                       : v
                   )));
                 }
@@ -229,45 +311,9 @@ const Index = () => {
     });
   };
 
-  const handleRefresh = async (showToasts: boolean = true) => {
-    if (showToasts) {
-      toast.info("Refreshing videos...");
-    }
-    try {
-      const response = await fetch('/videos');
-      if (!response.ok) {
-        throw new Error(`Failed to fetch videos: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      console.log('Fetched videos:', data);
-      
-      // Convert backend video data to frontend format
-      const backendVideos: UploadedVideo[] = data.videos.map((video: any) => ({
-        id: video.filename,
-        title: video.filename.replace(/\.[^/.]+$/, ""),
-        uploadDate: new Date(video.uploadedAt).toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        }),
-        status: "completed" as const,
-        // These are raw uploads. Annotated assets are discovered via status polling on new uploads.
-      }));
-      
-      setUploadedVideos(backendVideos);
-      if (showToasts) {
-        toast.success(`Loaded ${backendVideos.length} videos from server`);
-      }
-    } catch (error) {
-      console.error('Error fetching videos:', error);
-      // Only show error toast if this is a user-initiated refresh
-      // Silent failures on initial load allow navigation to work even if backend is down
-      if (showToasts) {
-        toast.error("Failed to refresh videos from server");
-      }
-    }
-  };
+  // Removed handleRefresh - we no longer fetch all videos on the main page
+  // Only videos that are actively being processed are shown here
+  // Completed videos are shown in the My Detections page
 
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
@@ -344,7 +390,7 @@ const Index = () => {
         {/* Rewritten / improved text from NLP API */}
         {improvedText && (
           <div className="max-w-3xl mx-auto mb-8">
-            <h4 className="text-sm font-medium text-foreground mb-2">Rewritten prompt</h4>
+            <h4 className="text-sm font-medium text-foreground mb-2">Detection Settings</h4>
             <div className="bg-card rounded-md p-4 border border-border text-foreground">
               {improvedText}
             </div>
@@ -353,7 +399,33 @@ const Index = () => {
 
         {/* Upload Zone */}
         <div className="mb-12">
-          <VideoUploadZone onUpload={handleUpload} />
+          <div className="flex justify-center items-stretch gap-6 max-w-4xl mx-auto">
+            <div className="flex-1">
+              <VideoUploadZone onUpload={handleUpload} />
+            </div>
+            <div
+              onClick={() => navigate("/detections")}
+              className={cn(
+                "relative rounded-2xl border-2 border-dashed transition-all duration-300",
+                "bg-gradient-to-br from-card to-secondary/30",
+                "hover:shadow-lg hover:scale-[1.01] hover:border-primary",
+                "flex-1 cursor-pointer",
+                "border-border"
+              )}
+            >
+              <div className="flex flex-col items-center justify-center px-6 py-12">
+                <div className="mb-4 p-5 rounded-full transition-all duration-300 bg-gradient-to-br from-primary to-accent shadow-lg">
+                  <Folder className="w-10 h-10 text-primary-foreground" />
+                </div>
+                <h3 className="text-xl font-semibold mb-2 text-foreground">
+                  My Detections
+                </h3>
+                <p className="text-muted-foreground mb-2 text-center max-w-xs text-sm">
+                  View your completed video analyses
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Upload Progress */}
@@ -375,46 +447,46 @@ const Index = () => {
           </div>
         )}
 
-        {/* Uploaded Videos */}
-        <div>
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-semibold text-foreground">
-              Uploaded Videos
-            </h2>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleRefresh(true)}
-              className="gap-2"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Refresh
-            </Button>
-          </div>
+        {/* Processing Videos */}
+        {(() => {
+          // Filter to only show videos that are still processing
+          const processingVideos = uploadedVideos.filter(
+            (video) => video.status === "processing" || video.status === "analyzing"
+          );
 
-          {uploadedVideos.length === 0 ? (
-            <div className="bg-card rounded-xl p-12 text-center border border-border shadow-md">
-              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-muted mb-4">
-                <Video className="w-8 h-8 text-muted-foreground" />
+          return (
+            <div className="max-w-4xl mx-auto">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-2xl font-semibold text-foreground">
+                  Processing Videos
+                </h2>
               </div>
-              <h3 className="text-xl font-semibold mb-2 text-foreground">
-                No videos yet
-              </h3>
-              <p className="text-muted-foreground max-w-md mx-auto">
-                Upload your first video to get started with AI-powered analysis
-              </p>
+
+              {processingVideos.length === 0 ? (
+                <div className="bg-card rounded-xl p-12 text-center border border-border shadow-md">
+                  <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-muted mb-4">
+                    <Video className="w-8 h-8 text-muted-foreground" />
+                  </div>
+                  <h3 className="text-xl font-semibold mb-2 text-foreground">
+                    No videos processing
+                  </h3>
+                  <p className="text-muted-foreground max-w-md mx-auto">
+                    Upload a video to start processing, or check My Detections for completed videos
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-6">
+                  {processingVideos.map((video) => (
+                    <VideoCard
+                      key={video.id}
+                      video={video}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {uploadedVideos.map((video) => (
-                <VideoCard
-                  key={video.id}
-                  video={video}
-                />
-              ))}
-            </div>
-          )}
-        </div>
+          );
+        })()}
       </div>
     </div>
   );

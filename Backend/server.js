@@ -3,6 +3,7 @@ const multer = require('multer');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 const { VideoProcessor } = require('./routes/video_processor');
 
 // Load environment variables
@@ -283,6 +284,75 @@ app.get('/status/:stem', (req, res) => {
   }
 });
 
+// Thumbnail endpoint - generate thumbnail from video
+app.get('/thumbnail/:stem', (req, res) => {
+  const stem = req.params.stem;
+  const thumbnailDir = path.join(uploadsDir, 'thumbnails');
+  
+  // Ensure thumbnail directory exists
+  if (!fs.existsSync(thumbnailDir)) {
+    fs.mkdirSync(thumbnailDir, { recursive: true });
+  }
+  
+  const thumbnailPath = path.join(thumbnailDir, `${stem}.jpg`);
+  
+  // If thumbnail already exists, serve it
+  if (fs.existsSync(thumbnailPath)) {
+    res.contentType('image/jpeg');
+    return res.sendFile(path.resolve(thumbnailPath));
+  }
+  
+  // Find the video file
+  const videoFiles = fs.readdirSync(uploadsDir).filter(file => {
+    const fileStem = file.replace(/\.[^/.]+$/, "");
+    return fileStem === stem && ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.mkv'].includes(path.extname(file).toLowerCase());
+  });
+  
+  if (videoFiles.length === 0) {
+    return res.status(404).json({ error: 'Video not found' });
+  }
+  
+  const videoPath = path.join(uploadsDir, videoFiles[0]);
+  
+  // Generate thumbnail using ffmpeg (extract frame at 1 second)
+  const isWindows = process.platform === 'win32';
+  const ffmpegCmd = isWindows ? 'ffmpeg.exe' : 'ffmpeg';
+  
+  const ffmpegProcess = spawn(ffmpegCmd, [
+    '-i', videoPath,
+    '-ss', '00:00:01',  // Seek to 1 second
+    '-vframes', '1',    // Extract 1 frame
+    '-q:v', '2',        // High quality
+    '-y',               // Overwrite output
+    thumbnailPath
+  ]);
+  
+  let errorOutput = '';
+  
+  ffmpegProcess.stderr.on('data', (data) => {
+    errorOutput += data.toString();
+  });
+  
+  ffmpegProcess.on('error', (error) => {
+    if (error.code === 'ENOENT') {
+      console.error('[THUMBNAIL] ffmpeg not found');
+      return res.status(500).json({ error: 'ffmpeg not available for thumbnail generation' });
+    }
+    console.error('[THUMBNAIL] Error:', error);
+    return res.status(500).json({ error: 'Failed to generate thumbnail', details: error.message });
+  });
+  
+  ffmpegProcess.on('close', (code) => {
+    if (code === 0 && fs.existsSync(thumbnailPath)) {
+      res.contentType('image/jpeg');
+      res.sendFile(path.resolve(thumbnailPath));
+    } else {
+      console.error('[THUMBNAIL] Failed to generate thumbnail:', errorOutput);
+      res.status(500).json({ error: 'Failed to generate thumbnail', details: errorOutput });
+    }
+  });
+});
+
 // Debug endpoint to check if work directory files are accessible
 app.get('/debug/work/:filename', (req, res) => {
   const filename = req.params.filename;
@@ -335,6 +405,8 @@ app.use((error, req, res, next) => {
 });
 
 app.use('/uploads', express.static(uploadsDir));
+// Serve thumbnails
+app.use('/thumbnails', express.static(path.join(uploadsDir, 'thumbnails')));
 // Also serve the work directory where annotated videos and detections are stored
 // Use absolute path to ensure consistency with VideoProcessor
 const workDirStatic = process.env.WORK_DIR 

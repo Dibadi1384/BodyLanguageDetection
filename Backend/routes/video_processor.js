@@ -365,7 +365,75 @@ class VideoProcessor {
 		const args = [videoPath, detectionsPath, outputPath];
 
 		const annotatorScript = path.join(__dirname, "src", "video_annotator.py");
-		const result = await this.runPythonScript(annotatorScript, args);
+		
+		// Track annotation progress by parsing stderr
+		let annotationProgress = { frameIdx: 0, totalFrames: 0, percentage: 0 };
+		
+		// Override runPythonScript to capture progress in real-time for annotation
+		const result = await new Promise((resolve, reject) => {
+			const isWindows = process.platform === 'win32';
+			let venvPython;
+			if (isWindows) {
+				venvPython = path.join(__dirname, "..", "venv", "Scripts", "python.exe");
+			} else {
+				venvPython = path.join(__dirname, "..", "venv", "bin", "python3");
+			}
+			const pythonCmd = fs.existsSync(venvPython) ? venvPython : (isWindows ? "python" : "python3");
+			
+			const childProcess = spawn(pythonCmd, [annotatorScript, ...args], {
+				cwd: path.dirname(annotatorScript),
+			});
+			
+			let stdout = "";
+			let stderr = "";
+			
+			childProcess.stdout.on("data", (data) => {
+				stdout += data.toString();
+			});
+			
+			childProcess.stderr.on("data", (data) => {
+				const output = data.toString();
+				stderr += output;
+				// Parse progress lines like "Progress: 52.6% (100/190 frames)"
+				const lines = output.trim().split('\n');
+				lines.forEach(line => {
+					if (line.trim()) {
+						console.log(line.trim());
+						// Match: Progress: X.X% (frame_idx/total_frames frames)
+						const progressMatch = line.match(/Progress:\s*([\d.]+)%\s*\((\d+)\/(\d+)\s*frames\)/);
+						if (progressMatch) {
+							const percentage = parseFloat(progressMatch[1]);
+							const frameIdx = parseInt(progressMatch[2]);
+							const totalFrames = parseInt(progressMatch[3]);
+							annotationProgress = { frameIdx, totalFrames, percentage };
+							// Update status with progress
+							this.updateStatus('annotating_video', 3, {
+								action: 'Annotating video frames',
+								frameIdx,
+								totalFrames,
+								percentage
+							});
+						}
+					}
+				});
+			});
+			
+			childProcess.on("error", (error) => {
+				if (error.code === 'ENOENT') {
+					reject(new Error(`Python not found. Tried: ${pythonCmd}`));
+				} else {
+					reject(error);
+				}
+			});
+			
+			childProcess.on("close", (code) => {
+				if (code !== 0) {
+					reject(new Error(`Annotation failed with code ${code}\n${stderr}`));
+				} else {
+					resolve({ stdout: stdout.trim(), stderr });
+				}
+			});
+		});
 
 		// The script outputs the annotated video path as the last line
 		const annotatedVideoPath = result.stdout.split("\n").pop();

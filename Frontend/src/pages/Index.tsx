@@ -120,6 +120,12 @@ const Index = () => {
       const formData = new FormData();
       formData.append('video', file);
       
+      // Send original user input (before refinement) for filename generation
+      if (detectionDescription && detectionDescription.trim()) {
+        formData.append('userInput', detectionDescription.trim());
+        console.log('[FRONTEND DEBUG] Sending original user input for filename:', detectionDescription.trim());
+      }
+      
       // Send refined prompt if available (already refined through NLP endpoint)
       if (improvedText) {
         formData.append('refinedPrompt', improvedText);

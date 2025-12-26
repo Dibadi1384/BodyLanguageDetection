@@ -14,11 +14,11 @@ import {
   Clock,
   Target,
   Activity,
-  Zap,
+  Users,
   Video,
   Loader2
 } from "lucide-react";
-import { fetchAnalysisData, type FrontendAnalysisData } from "@/lib/dataMappers";
+import { fetchAnalysisData, type FrontendAnalysisData, type PersonStat } from "@/lib/dataMappers";
 
 const Results = () => {
   const navigate = useNavigate();
@@ -26,6 +26,7 @@ const Results = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoReady, setVideoReady] = useState(false);
 
@@ -100,7 +101,127 @@ const Results = () => {
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       setCurrentTime(videoRef.current.currentTime);
+      // Update duration if available and valid
+      if (videoRef.current.duration && !isNaN(videoRef.current.duration) && isFinite(videoRef.current.duration)) {
+        setVideoDuration(videoRef.current.duration);
+      }
     }
+  };
+
+  const handleLoadedMetadata = () => {
+    if (videoRef.current) {
+      setVideoReady(true);
+      setVideoError(null);
+      // Set duration from video metadata
+      if (videoRef.current.duration && !isNaN(videoRef.current.duration) && isFinite(videoRef.current.duration)) {
+        setVideoDuration(videoRef.current.duration);
+      }
+    }
+  };
+
+  // Get people visible at current time (based on frame index)
+  const getVisiblePeopleAtTime = (currentTime: number): PersonStat[] => {
+    if (!analysisData) return [];
+    
+    // Calculate the current frame index based on time and FPS
+    const fps = analysisData.fps || 30;
+    const currentFrameIndex = Math.floor(currentTime * fps);
+    
+    return analysisData.peopleStats.filter(personStat => {
+      // Check if person has detections at or near the current frame
+      const frameWindow = 5; // Allow ±5 frames for visibility
+      return analysisData.personDetections.some(
+        detection => 
+          detection.personId === personStat.personId &&
+          Math.abs(detection.frameIndex - currentFrameIndex) <= frameWindow
+      );
+    });
+  };
+
+  // Get the detection for a person at the current time (exact frame match, or previous detection for smooth transitions)
+  const getPersonDetectionAtTime = (personId: number, currentTime: number) => {
+    if (!analysisData) return null;
+    
+    // Calculate the current frame index based on time and FPS
+    const fps = analysisData.fps || 30;
+    const currentFrameIndex = Math.floor(currentTime * fps);
+    
+    // Find detections for this person
+    const personDetections = analysisData.personDetections.filter(
+      d => d.personId === personId
+    );
+    
+    if (personDetections.length === 0) return null;
+    
+    // First, try to find an exact frame match
+    const exactMatch = personDetections.find(
+      d => d.frameIndex === currentFrameIndex
+    );
+    
+    if (exactMatch) return exactMatch;
+    
+    // If no exact match, find the closest frame index (within a small range)
+    // This handles cases where frames might be sampled at intervals
+    const frameWindow = 5; // Allow ±5 frames for matching
+    const nearbyDetections = personDetections.filter(
+      d => Math.abs(d.frameIndex - currentFrameIndex) <= frameWindow
+    );
+    
+    if (nearbyDetections.length > 0) {
+      // Find the detection with the smallest frame index difference
+      const closest = nearbyDetections.reduce((prev, curr) => 
+        Math.abs(curr.frameIndex - currentFrameIndex) < Math.abs(prev.frameIndex - currentFrameIndex) ? curr : prev
+      );
+      return closest;
+    }
+    
+    // If no nearby detections, use the most recent detection before current time
+    // This creates smooth transitions by keeping the previous stat visible
+    const earlierDetections = personDetections.filter(
+      d => d.frameIndex <= currentFrameIndex
+    );
+    
+    if (earlierDetections.length > 0) {
+      // Always use the most recent previous detection (no time limit for smooth transitions)
+      const mostRecent = earlierDetections.reduce((prev, curr) => 
+        curr.frameIndex > prev.frameIndex ? curr : prev
+      );
+      return mostRecent;
+    }
+    
+    // If person hasn't been detected yet at this point in time, return null
+    return null;
+  };
+  
+  // Get cumulative stats for a person (for frame count display and time range)
+  const getPersonCumulativeStats = (personId: number, currentTime: number) => {
+    if (!analysisData) return { frameCount: 0, firstSeen: null, lastSeen: null };
+    
+    // Get all detections for this person (not filtered by currentTime)
+    const allPersonDetections = analysisData.personDetections.filter(
+      d => d.personId === personId
+    );
+    
+    if (allPersonDetections.length === 0) {
+      return { frameCount: 0, firstSeen: null, lastSeen: null };
+    }
+    
+    // Get frame count up to current time
+    const detectionsUpToTime = allPersonDetections.filter(
+      d => d.timestamp <= currentTime
+    );
+    
+    // Get time range from ALL detections (static, doesn't change with currentTime)
+    // Find the smallest (first detection) and largest (last detection) timestamps
+    const allTimestamps = allPersonDetections.map(d => d.timestamp);
+    const smallestTime = Math.min(...allTimestamps);
+    const largestTime = Math.max(...allTimestamps);
+    
+    return {
+      frameCount: detectionsUpToTime.length,
+      firstSeen: smallestTime,
+      lastSeen: largestTime,
+    };
   };
 
 
@@ -193,9 +314,14 @@ const Results = () => {
                         onTimeUpdate={handleTimeUpdate}
                         onPlay={() => setIsPlaying(true)}
                         onPause={() => setIsPlaying(false)}
+                        onLoadedMetadata={handleLoadedMetadata}
                         onLoadedData={() => {
                           setVideoReady(true);
                           setVideoError(null);
+                          // Update duration on loaded data as well
+                          if (videoRef.current?.duration && !isNaN(videoRef.current.duration) && isFinite(videoRef.current.duration)) {
+                            setVideoDuration(videoRef.current.duration);
+                          }
                         }}
                         onError={(e) => {
                           const video = e.currentTarget;
@@ -287,10 +413,17 @@ const Results = () => {
 
                 {/* Video Timeline Scrubber */}
                 <div className="mt-4 space-y-2">
-                  <Progress value={(currentTime / analysisData.videoDuration) * 100} className="h-2" />
+                  <div className="relative w-full h-2 bg-muted rounded-full overflow-hidden">
+                    <div 
+                      className="absolute left-0 top-0 h-full bg-primary rounded-full transition-[width] duration-150 ease-linear will-change-[width]"
+                      style={{ 
+                        width: `${videoDuration > 0 ? Math.min((currentTime / videoDuration) * 100, 100) : 0}%` 
+                      }}
+                    />
+                  </div>
                   <div className="flex items-center justify-between text-sm text-muted-foreground">
                     <span>{currentTime.toFixed(1)}s</span>
-                    <span>{analysisData.videoDuration.toFixed(1)}s</span>
+                    <span>{videoDuration > 0 ? videoDuration.toFixed(1) : (analysisData?.videoDuration?.toFixed(1) || '0.0')}s</span>
                   </div>
                 </div>
               </CardContent>
@@ -368,62 +501,116 @@ const Results = () => {
                 <Separator />
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Zap className="w-4 h-4 text-yellow-500" />
-                    <span className="text-sm text-muted-foreground">Processing Time</span>
+                    <Users className="w-4 h-4 text-yellow-500" />
+                    <span className="text-sm text-muted-foreground">Total People Detected</span>
                   </div>
                   <span className="text-2xl font-bold text-foreground">
-                    {analysisData.summary.processingTime}s
+                    {analysisData.summary.totalPeopleDetected}
                   </span>
                 </div>
               </CardContent>
             </Card>
 
-            {/* Detected Objects List */}
+            {/* Detected People List */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Detected Objects</CardTitle>
+                <CardTitle className="text-lg">Detected People</CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <ScrollArea className="h-[500px]">
                   <div className="p-6 pt-0 space-y-3">
                     {(() => {
-                      const validDetections = analysisData.detections.filter(
-                        (detection) => detection && detection.timestamp != null && detection.confidence != null
-                      );
-                      
-                      if (validDetections.length === 0) {
+                      if (analysisData.peopleStats.length === 0) {
                         return (
                           <div className="text-center py-8 text-muted-foreground">
-                            <p>No detections found</p>
-                            <p className="text-xs mt-2">The analysis completed but no detections were generated.</p>
+                            <p>No people detected</p>
+                            <p className="text-xs mt-2">The analysis completed but no people were detected.</p>
                           </div>
                         );
                       }
                       
-                       return validDetections.map((detection) => (
-                         <div
-                           key={detection.id}
-                           className="w-full text-left p-4 rounded-lg border border-border bg-card"
-                         >
-                          <div className="flex items-start justify-between mb-3">
-                            <span className="font-medium text-foreground">{detection.label || 'Unknown'}</span>
-                            <Badge variant="outline" className="text-xs font-mono">
-                              {(detection.timestamp ?? 0).toFixed(1)}s
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
-                              <div 
-                                className={`h-full ${getProgressBarColor(detection.confidence ?? 0)} transition-all`}
-                                style={{ width: `${detection.confidence ?? 0}%` }}
-                              />
+                      // Show all people with their current frame stats
+                      return analysisData.peopleStats.map((personStat) => {
+                        const currentDetection = getPersonDetectionAtTime(personStat.personId, currentTime);
+                        const cumulativeStats = getPersonCumulativeStats(personStat.personId, currentTime);
+                        
+                        // Use current frame detection if available
+                        // If no detection at current frame, it will use the previous detection (handled in getPersonDetectionAtTime)
+                        const currentAction = currentDetection?.label || 'Not detected yet';
+                        const currentConfidence = currentDetection?.confidence ?? 0;
+                        
+                        // Calculate time range directly from personDetections to ensure accuracy
+                        const allPersonDetections = analysisData.personDetections.filter(
+                          d => d.personId === personStat.personId
+                        );
+                        const allTimestamps = allPersonDetections.map(d => d.timestamp).filter(ts => !isNaN(ts) && ts >= 0);
+                        const timeRange = allTimestamps.length > 0 ? {
+                          firstSeen: Math.min(...allTimestamps),
+                          lastSeen: Math.max(...allTimestamps)
+                        } : null;
+                        
+                        return (
+                          <div
+                            key={personStat.personId}
+                            className="w-full text-left p-4 rounded-lg border border-primary bg-primary/5"
+                          >
+                            <div className="flex items-start justify-between mb-3">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-foreground">
+                                  Person {personStat.personId}
+                                </span>
+                              </div>
+                              <Badge variant="outline" className="text-xs font-mono">
+                                {cumulativeStats.frameCount} frames
+                              </Badge>
                             </div>
-                            <span className={`text-sm font-semibold ${getConfidenceColor(detection.confidence ?? 0)}`}>
-                              {(detection.confidence ?? 0).toFixed(1)}%
-                             </span>
-                           </div>
-                         </div>
-                       ));
+                            
+                            <div className="space-y-2">
+                              <div>
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-xs text-muted-foreground">Action:</span>
+                                  <span className="text-xs font-medium text-foreground">
+                                    {currentAction}
+                                  </span>
+                                </div>
+                              </div>
+                              
+                              <div>
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-xs text-muted-foreground">Confidence:</span>
+                                  <span className={`text-xs font-semibold ${getConfidenceColor(currentConfidence)}`}>
+                                    {currentConfidence.toFixed(1)}%
+                                  </span>
+                                </div>
+                                <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
+                                  <div 
+                                    className={`h-full rounded-full ${getProgressBarColor(currentConfidence)} transition-all duration-300 ease-in-out`}
+                                    style={{ width: `${currentConfidence}%` }}
+                                  />
+                                </div>
+                              </div>
+                              
+                              {currentDetection && (
+                                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                  <span>Frame Time:</span>
+                                  <span className="font-mono">
+                                    {currentTime.toFixed(1)}s
+                                  </span>
+                                </div>
+                              )}
+                              
+                              {timeRange && (
+                                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                  <span>Time Range:</span>
+                                  <span className="font-mono">
+                                    {timeRange.firstSeen.toFixed(1)}s - {timeRange.lastSeen.toFixed(1)}s
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      });
                     })()}
                   </div>
                 </ScrollArea>

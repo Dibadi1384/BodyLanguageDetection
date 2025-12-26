@@ -35,13 +35,26 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// Helper function to sanitize filename to be filesystem-safe
+function sanitizeFilename(input) {
+  if (!input) return '';
+  // Replace invalid filename characters with underscores
+  // Invalid chars: < > : " / \ | ? * and control characters
+  return input
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, '_')  // Replace spaces with underscores
+    .replace(/_+/g, '_')   // Replace multiple underscores with single
+    .replace(/^_+|_+$/g, '') // Remove leading/trailing underscores
+    .substring(0, 100);    // Limit length to 100 characters
+}
+
 // Configure multer for video file uploads
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, uploadsDir);
   },
   filename: function (req, file, cb) {
-    // Generate unique filename with timestamp
+    // Generate unique filename with timestamp (will be renamed after upload if userInput is provided)
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
     cb(null, 'video-' + uniqueSuffix + path.extname(file.originalname));
   }
@@ -88,13 +101,37 @@ app.post('/upload', upload.single('video'), (req, res) => {
       return res.status(400).json({ error: 'No video file uploaded' });
     }
 
+    // Get user input (original detection setting before refinement)
+    const userInput = req.body.userInput || '';
+    const sanitizedInput = sanitizeFilename(userInput);
+    
+    // Generate filename with format: {userInput}_{date}_{timestamp}.{ext}
+    let finalFilename = req.file.filename;
+    if (sanitizedInput) {
+      const dateStr = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+      const timestamp = Date.now();
+      const ext = path.extname(req.file.originalname);
+      const baseName = `${sanitizedInput}_${dateStr}_${timestamp}`;
+      finalFilename = baseName + ext;
+      const finalPath = path.join(uploadsDir, finalFilename);
+      
+      // Rename the file to the desired filename
+      try {
+        fs.renameSync(req.file.path, finalPath);
+        console.log('[UPLOAD] Renamed video file from', req.file.filename, 'to', finalFilename);
+      } catch (renameErr) {
+        console.error('[UPLOAD ERROR] Failed to rename file:', renameErr);
+        // Continue with original filename if rename fails
+      }
+    }
+
     const fileInfo = {
-      filename: req.file.filename,
+      filename: finalFilename,
       originalName: req.file.originalname,
       size: req.file.size,
       mimetype: req.file.mimetype,
       destination: req.file.destination,
-      path: req.file.path,
+      path: sanitizedInput ? path.join(uploadsDir, finalFilename) : req.file.path,
       uploadedAt: new Date().toISOString()
     };
 

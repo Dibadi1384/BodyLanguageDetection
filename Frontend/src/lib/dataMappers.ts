@@ -115,6 +115,29 @@ export interface Detection {
     width: number;
     height: number;
   };
+  personId?: number;
+}
+
+export interface PersonStat {
+  personId: number;
+  frameCount: number;
+  avgConfidence: number;
+  timeRange: {
+    firstSeen: number;
+    lastSeen: number;
+  };
+  labels: Record<string, number>; // label -> count
+  primaryLabel: string;
+}
+
+export interface PersonDetection {
+  personId: number;
+  timestamp: number;
+  frameIndex: number;
+  label: string;
+  confidence: number;
+  analysisResult: Record<string, any>;
+  bbox: BackendBoundingBox;
 }
 
 export interface Segment {
@@ -127,7 +150,7 @@ export interface Segment {
 export interface AnalysisSummary {
   totalDetections: number;
   avgConfidence: number;
-  processingTime: number;
+  totalPeopleDetected: number;
 }
 
 export interface FrontendAnalysisData {
@@ -135,11 +158,14 @@ export interface FrontendAnalysisData {
   videoDuration: number;
   videoWidth: number;
   videoHeight: number;
+  fps: number;
   annotatedVideoUrl?: string;
   detectionsUrl?: string;
   detections: Detection[];
   segments: Segment[];
   summary: AnalysisSummary;
+  peopleStats: PersonStat[];
+  personDetections: PersonDetection[]; // All detections grouped by person and frame
 }
 
 /**
@@ -228,27 +254,52 @@ function transformDetectionsData(
   const videoWidth = firstFrame?.image_width || 1920;
   const videoHeight = firstFrame?.image_height || 1080;
   
-  // Calculate duration from last frame timestamp + estimated frame duration
-  const lastFrame = frameDetections[frameDetections.length - 1];
+  // Calculate duration from maximum frame index
   const fps = data.video_info?.fps || 30;
-  const videoDuration = lastFrame ? lastFrame.timestamp_s + (1 / fps) : 0;
+  const maxFrameIndex = frameDetections.length > 0 
+    ? Math.max(...frameDetections.map(f => f.frame_index ?? 0))
+    : 0;
+  const videoDuration = maxFrameIndex > 0 ? maxFrameIndex / fps : 0;
   
-  // Transform detections
+  // Transform detections and track people
   const detections: Detection[] = [];
+  const personDetections: PersonDetection[] = [];
+  const peopleMap = new Map<number, {
+    timestamps: number[];
+    confidences: number[];
+    labels: Record<string, number>;
+  }>();
   let detectionId = 0;
   
   for (const frame of frameDetections) {
     if (!frame || !frame.people || !Array.isArray(frame.people)) continue;
     
-    const timestamp = frame.timestamp_s ?? 0;
+    // Calculate timestamp from frame_index if timestamp_s is null
+    const frameIndex = frame.frame_index ?? 0;
+    const timestamp = frame.timestamp_s ?? (frameIndex / fps);
     
     for (const person of frame.people) {
       if (!person) continue;
       
+      const personId = person.person_id ?? -1;
+      
       // Extract primary label from analysis_result
       const analysisResult = person.analysis_result || {};
-      const label = extractLabel(analysisResult) || `Person ${person.person_id ?? 'Unknown'}`;
+      const label = extractLabel(analysisResult) || `Person ${personId}`;
       const confidence = (person.bbox_confidence ?? 0) * 100;
+      
+      // Track person stats
+      if (!peopleMap.has(personId)) {
+        peopleMap.set(personId, {
+          timestamps: [],
+          confidences: [],
+          labels: {},
+        });
+      }
+      const personData = peopleMap.get(personId)!;
+      personData.timestamps.push(timestamp);
+      personData.confidences.push(confidence);
+      personData.labels[label] = (personData.labels[label] || 0) + 1;
       
       // Ensure bbox exists and has valid values
       const bbox = person.bbox || {};
@@ -263,6 +314,7 @@ function transformDetectionsData(
         label,
         confidence,
         duration: 1 / fps, // Duration until next frame
+        personId,
         boundingBox: {
           x: xMin,
           y: yMin,
@@ -270,8 +322,45 @@ function transformDetectionsData(
           height: Math.max(0, yMax - yMin),
         },
       });
+      
+      personDetections.push({
+        personId,
+        timestamp,
+        frameIndex,
+        label,
+        confidence,
+        analysisResult,
+        bbox,
+      });
     }
   }
+  
+  // Generate people stats
+  const peopleStats: PersonStat[] = Array.from(peopleMap.entries()).map(([personId, data]) => {
+    const timestamps = data.timestamps.sort((a, b) => a - b);
+    const avgConfidence = data.confidences.length > 0
+      ? data.confidences.reduce((sum, c) => sum + c, 0) / data.confidences.length
+      : 0;
+    
+    // Find primary label
+    const primaryLabel = Object.entries(data.labels)
+      .sort((a, b) => b[1] - a[1])[0]?.[0] || 'Unknown';
+    
+    return {
+      personId,
+      frameCount: data.confidences.length,
+      avgConfidence: Math.round(avgConfidence),
+      timeRange: {
+        firstSeen: timestamps[0] ?? 0,
+        lastSeen: timestamps[timestamps.length - 1] ?? 0,
+      },
+      labels: data.labels,
+      primaryLabel,
+    };
+  });
+  
+  // Sort people stats by person ID
+  peopleStats.sort((a, b) => a.personId - b.personId);
   
   // Generate segments from frame detections
   const segments: Segment[] = generateSegments(frameDetections, fps);
@@ -281,12 +370,14 @@ function transformDetectionsData(
   const avgConfidence = totalDetections > 0
     ? Math.round(detections.reduce((sum, d) => sum + d.confidence, 0) / totalDetections)
     : 0;
+  const totalPeopleDetected = peopleMap.size;
   
   return {
     videoTitle: videoStem || data.video_info?.video_stem || 'Video Analysis',
     videoDuration,
     videoWidth,
     videoHeight,
+    fps,
     annotatedVideoUrl,
     detectionsUrl,
     detections,
@@ -294,8 +385,10 @@ function transformDetectionsData(
     summary: {
       totalDetections,
       avgConfidence,
-      processingTime: 0, // Could be calculated from status timestamps if needed
+      totalPeopleDetected,
     },
+    peopleStats,
+    personDetections,
   };
 }
 

@@ -66,7 +66,7 @@ export const VideoUploadZone = ({ onUpload }: VideoUploadZoneProps) => {
         className={cn(
           "relative rounded-2xl border-2 border-dashed transition-all duration-300",
           "bg-gradient-to-br from-card to-secondary/30",
-          "hover:shadow-lg hover:scale-[1.01]",
+          "hover:shadow-lg hover:scale-[1.01] hover:border-primary",
           "w-full",
           isDragging
             ? "border-primary bg-primary/5 shadow-xl scale-[1.02]"

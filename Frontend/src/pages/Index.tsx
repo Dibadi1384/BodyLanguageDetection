@@ -29,9 +29,9 @@ interface UploadedVideo {
   description?: string;
 }
 
-// Helper function to format status message from status object
+// Helper function to format status message from status object (returns base message without dots)
 const formatStatusMessage = (status: any): string => {
-  if (!status) return "Processing...";
+  if (!status) return "Processing";
   
   // The status object from backend has details containing the actual statusInfo
   const details = status.details || {};
@@ -41,7 +41,7 @@ const formatStatusMessage = (status: any): string => {
   
   // Stage 0: Refining prompt
   if (stage === 0 || statusType === 'refining_prompt') {
-    return "Refining detection prompt...";
+    return "Refining detection prompt";
   }
   
   // Stage 1: Extracting frames
@@ -50,21 +50,21 @@ const formatStatusMessage = (status: any): string => {
     if (framesExtracted !== null && framesExtracted !== undefined) {
       return `Extracting frames: ${framesExtracted} frames`;
     }
-    return "Extracting video frames...";
+    return "Extracting video frames";
   }
   
-  // Stage 2: Analyzing frames (LLM Detection)
+  // Stage 2: Analyzing frames (Detection)
   if (stage === 2 || statusType === 'analyzing_frames') {
     const framesAnalyzed = details.framesAnalyzed !== undefined ? details.framesAnalyzed : (status.framesAnalyzed !== undefined ? status.framesAnalyzed : null);
     const framesExtracted = details.framesExtracted !== undefined ? details.framesExtracted : (status.framesExtracted !== undefined ? status.framesExtracted : null);
     
     if (framesAnalyzed !== null && framesAnalyzed !== undefined && framesExtracted !== null && framesExtracted !== undefined) {
       const percentage = Math.min(100, Math.round((framesAnalyzed / framesExtracted) * 100));
-      return `LLM Detection ${percentage}%...`;
+      return `Detection ${percentage}%`;
     } else if (framesAnalyzed !== null && framesAnalyzed !== undefined) {
-      return `LLM Detection: ${framesAnalyzed} frames...`;
+      return `Detection: ${framesAnalyzed} frames`;
     }
-    return "LLM Detection in progress...";
+    return "Detection in progress";
   }
   
   // Stage 3: Annotating video
@@ -76,19 +76,19 @@ const formatStatusMessage = (status: any): string => {
     
     if (percentage !== null && percentage !== undefined) {
       // Use actual percentage from backend progress
-      return `Annotating Video Frames ${Math.round(percentage)}%...`;
+      return `Annotating Video Frames ${Math.round(percentage)}%`;
     } else if (frameIdx !== null && totalFrames !== null && totalFrames !== undefined) {
       // Calculate percentage from frame counts
       const calcPercentage = Math.min(100, Math.round((frameIdx / totalFrames) * 100));
-      return `Annotating Video Frames ${calcPercentage}%...`;
+      return `Annotating Video Frames ${calcPercentage}%`;
     } else if (action.includes('completed')) {
-      return `Annotating Video Frames 100%...`;
+      return `Annotating Video Frames 100%`;
     }
-    return "Annotating video frames...";
+    return "Annotating video frames";
   }
   
   // Fallback to action or status
-  return action || statusType || "Processing...";
+  return action || statusType || "Processing";
 };
 
 const Index = () => {
@@ -99,9 +99,18 @@ const Index = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [improvedText, setImprovedText] = useState<string | null>(null);
   const [navigatedVideos, setNavigatedVideos] = useState<Set<string>>(new Set());
+  const [selectedKey, setSelectedKey] = useState<string>("emotion"); // Default to emotion
 
   // Note: We don't load all videos on mount anymore since we only show processing videos
   // The My Detections page will handle showing all completed videos
+
+  // Load selected key from localStorage on mount
+  useEffect(() => {
+    const savedKey = localStorage.getItem('detection_key');
+    if (savedKey && ['emotion', 'action', 'pose', 'expression'].includes(savedKey)) {
+      setSelectedKey(savedKey);
+    }
+  }, []);
 
   const handleUpload = (files: File[]) => {
     files.forEach((file) => {
@@ -133,6 +142,10 @@ const Index = () => {
       } else {
         console.log('[FRONTEND DEBUG] No refined prompt available - video will use default prompt');
       }
+      
+      // Send selected detection key
+      formData.append('detectionKey', selectedKey);
+      console.log('[FRONTEND DEBUG] Sending detection key:', selectedKey);
 
       // Use XMLHttpRequest for progress tracking
       const xhr = new XMLHttpRequest();
@@ -189,7 +202,7 @@ const Index = () => {
               }),
               status: "analyzing",
               stem,
-              statusMessage: "Processing...",
+              statusMessage: "Processing",
               description: videoTitle,
             };
             setUploadedVideos((prev) => [newVideo, ...prev]);
@@ -333,18 +346,54 @@ const Index = () => {
         </div>
 
         {/* Detection Description */}
-        <div className="mb-8 max-w-3xl mx-auto">
+        <div className="mb-8 max-w-4xl mx-auto w-full">
           <label htmlFor="detection-description" className="block text-sm font-medium text-foreground mb-2">
             What would you like to detect?
           </label>
-          <div className="flex gap-4 items-center">
+          <div className="flex gap-4 items-center mb-4 w-full">
             <Input
               id="detection-description"
               placeholder="Specify the body language, gestures, or behaviors you want to analyze."
               value={detectionDescription}
               onChange={(e) => setDetectionDescription(e.target.value)}
-              className="flex-1 max-w-2xl"
+              className="flex-1 w-full"
             />
+          </div>
+          <div className="flex gap-3 items-center w-full">
+            <div className="flex gap-2 flex-1">
+              <Button
+                variant={selectedKey === "emotion" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setSelectedKey("emotion")}
+                className={`${selectedKey === "emotion" ? "" : "hover:border-primary hover:bg-transparent hover:text-foreground"} flex-1`}
+              >
+                Emotion
+              </Button>
+              <Button
+                variant={selectedKey === "action" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setSelectedKey("action")}
+                className={`${selectedKey === "action" ? "" : "hover:border-primary hover:bg-transparent hover:text-foreground"} flex-1`}
+              >
+                Action
+              </Button>
+              <Button
+                variant={selectedKey === "pose" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setSelectedKey("pose")}
+                className={`${selectedKey === "pose" ? "" : "hover:border-primary hover:bg-transparent hover:text-foreground"} flex-1`}
+              >
+                Pose
+              </Button>
+              <Button
+                variant={selectedKey === "expression" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setSelectedKey("expression")}
+                className={`${selectedKey === "expression" ? "" : "hover:border-primary hover:bg-transparent hover:text-foreground"} flex-1`}
+              >
+                Expression
+              </Button>
+            </div>
             <Button
               onClick={async () => {
                 if (!detectionDescription.trim()) {
@@ -354,6 +403,9 @@ const Index = () => {
 
                 setIsSaving(true);
                 setImprovedText(null);
+
+                // Save selected key to localStorage immediately when save is pressed
+                localStorage.setItem('detection_key', selectedKey);
 
                 // Prefer Vite env variable. If not set, use a relative `/api` path so
                 // the Vite dev server proxy can forward requests to the backend.
@@ -387,6 +439,7 @@ const Index = () => {
                 }
               }}
               disabled={isSaving}
+              className="bg-gradient-to-br from-primary to-accent hover:from-primary/90 hover:to-accent/90 text-white flex-1 shadow-lg"
             >
               {isSaving ? "Saving..." : "Save Detection Settings"}
             </Button>
@@ -395,9 +448,9 @@ const Index = () => {
 
         {/* Rewritten / improved text from NLP API */}
         {improvedText && (
-          <div className="max-w-3xl mx-auto mb-8">
+          <div className="mb-8 max-w-4xl mx-auto w-full">
             <h4 className="text-sm font-medium text-foreground mb-2">Detection Settings</h4>
-            <div className="bg-card rounded-md p-4 border border-border text-foreground">
+            <div className="bg-card rounded-md p-4 border border-border text-foreground w-full">
               {improvedText}
             </div>
           </div>

@@ -45,11 +45,20 @@ def get_font(size=20):
     
     return ImageFont.load_default()
 
-def extract_label_from_analysis(analysis_result: Dict) -> str:
-    """Extract a human-readable label from analysis_result."""
+def extract_label_from_analysis(analysis_result: Dict, detection_key: str = 'emotion') -> str:
+    """Extract a human-readable label from analysis_result, prioritizing the specified detection_key."""
     if not analysis_result or not isinstance(analysis_result, dict):
         return 'Unknown'
     
+    # Prioritize the selected detection key
+    if detection_key in analysis_result and analysis_result[detection_key]:
+        value = analysis_result[detection_key]
+        if isinstance(value, str) and value:
+            return value.capitalize()
+        elif isinstance(value, (int, float)) and value:
+            return str(value)
+    
+    # Fallback to other keys if selected key not found
     # Check for common fields in priority order
     if 'emotion' in analysis_result and analysis_result['emotion']:
         return str(analysis_result['emotion']).capitalize()
@@ -145,7 +154,8 @@ def draw_detection(
     frame: np.ndarray,
     person: Dict,
     color: Tuple[int, int, int] = (88, 214, 141),
-    bbox_line_width: int = 6
+    bbox_line_width: int = 6,
+    detection_key: str = 'emotion'
 ):
     """
     Draw bounding box and text badge for a detected person.
@@ -158,9 +168,9 @@ def draw_detection(
     x_min, y_min = bbox['x_min'], bbox['y_min']
     x_max, y_max = bbox['x_max'], bbox['y_max']
     
-    # Extract label from analysis
+    # Extract label from analysis using the selected detection key
     analysis = person.get('analysis_result', {})
-    label = extract_label_from_analysis(analysis)
+    label = extract_label_from_analysis(analysis, detection_key)
     
     # Convert frame to PIL Image
     frame_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
@@ -266,11 +276,15 @@ def get_interpolated_person_data(person_id: int, frame_idx: int, timelines: Dict
     
     return None
 
-def annotate_video(video_path: str, detections_path: str, output_path: str, show_progress: bool = True) -> str:
+def annotate_video(video_path: str, detections_path: str, output_path: str, detection_key: str = 'emotion', show_progress: bool = True) -> str:
     """Annotate video with bounding boxes and centered text labels."""
     # Load detections
     with open(detections_path, 'r') as f:
         data = json.load(f)
+    
+    # Get detection_key from data if not provided (backward compatibility)
+    if detection_key == 'emotion' and 'detection_key' in data:
+        detection_key = data['detection_key']
     
     frame_detections = {
         det['frame_index']: det 
@@ -356,7 +370,7 @@ def annotate_video(video_path: str, detections_path: str, output_path: str, show
                 color_idx = person_id % len(COLORS)
                 color = COLORS[color_idx]
                 
-                draw_detection(frame, person_data, color=color, bbox_line_width=bbox_line_width)
+                draw_detection(frame, person_data, color=color, bbox_line_width=bbox_line_width, detection_key=detection_key)
                 annotations_per_person[person_id] += 1
         
         out.write(frame)
@@ -380,7 +394,7 @@ def annotate_video(video_path: str, detections_path: str, output_path: str, show
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: python video_annotator.py <video_path> <detections.json> [output_path]", file=sys.stderr)
+        print("Usage: python video_annotator.py <video_path> <detections.json> [output_path] [detection_key]", file=sys.stderr)
         sys.exit(1)
     
     video_path = sys.argv[1]
@@ -394,6 +408,9 @@ def main():
         output_dir = Path(detections_path).parent
         output_path = str(output_dir / f"{video_stem}_annotated.mp4")
     
+    # Get detection_key from command line or default to 'emotion'
+    detection_key = sys.argv[4] if len(sys.argv) > 4 else 'emotion'
+    
     if not os.path.exists(video_path):
         print(f"Error: Video file not found: {video_path}", file=sys.stderr)
         sys.exit(1)
@@ -403,7 +420,7 @@ def main():
         sys.exit(1)
     
     # Create annotated video
-    result_path = annotate_video(video_path, detections_path, output_path)
+    result_path = annotate_video(video_path, detections_path, output_path, detection_key)
     
     # Output path (for Node.js)
     print(result_path)

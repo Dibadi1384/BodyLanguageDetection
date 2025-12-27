@@ -249,6 +249,9 @@ function transformDetectionsData(
 ): FrontendAnalysisData {
   const frameDetections = data.frame_detections || [];
   
+  // Get detection_key from data (stored in detections.json)
+  const detectionKey = (data as any).detection_key || 'emotion';
+  
   // Get video dimensions from first frame detection
   const firstFrame = frameDetections[0];
   const videoWidth = firstFrame?.image_width || 1920;
@@ -283,9 +286,9 @@ function transformDetectionsData(
       
       const personId = person.person_id ?? -1;
       
-      // Extract primary label from analysis_result
+      // Extract primary label from analysis_result using the selected detection key
       const analysisResult = person.analysis_result || {};
-      const label = extractLabel(analysisResult) || `Person ${personId}`;
+      const label = extractLabel(analysisResult, detectionKey) || `Person ${personId}`;
       const confidence = (person.bbox_confidence ?? 0) * 100;
       
       // Track person stats
@@ -302,7 +305,7 @@ function transformDetectionsData(
       personData.labels[label] = (personData.labels[label] || 0) + 1;
       
       // Ensure bbox exists and has valid values
-      const bbox = person.bbox || {};
+      const bbox: BackendBoundingBox = person.bbox || { x_min: 0, y_min: 0, x_max: 0, y_max: 0 };
       const xMin = bbox.x_min ?? 0;
       const yMin = bbox.y_min ?? 0;
       const xMax = bbox.x_max ?? 0;
@@ -330,7 +333,7 @@ function transformDetectionsData(
         label,
         confidence,
         analysisResult,
-        bbox,
+        bbox: bbox as BackendBoundingBox,
       });
     }
   }
@@ -363,7 +366,7 @@ function transformDetectionsData(
   peopleStats.sort((a, b) => a.personId - b.personId);
   
   // Generate segments from frame detections
-  const segments: Segment[] = generateSegments(frameDetections, fps);
+  const segments: Segment[] = generateSegments(frameDetections, fps, detectionKey);
   
   // Calculate summary
   const totalDetections = detections.length;
@@ -393,9 +396,20 @@ function transformDetectionsData(
 }
 
 /**
- * Extract a human-readable label from analysis_result
+ * Extract a human-readable label from analysis_result, prioritizing the selected detection key
  */
-function extractLabel(analysisResult: Record<string, any>): string {
+function extractLabel(analysisResult: Record<string, any>, detectionKey: string = 'emotion'): string {
+  // Prioritize the selected detection key
+  if (detectionKey in analysisResult && analysisResult[detectionKey]) {
+    const value = analysisResult[detectionKey];
+    if (typeof value === 'string' && value) {
+      return `${capitalize(detectionKey)}: ${value}`;
+    } else if (typeof value === 'number' && value) {
+      return `${capitalize(detectionKey)}: ${value}`;
+    }
+  }
+  
+  // Fallback to other keys if selected key not found
   // Look for common fields in analysis_result
   if (analysisResult.emotion) {
     return `Emotion: ${analysisResult.emotion}`;
@@ -427,7 +441,7 @@ function capitalize(str: string): string {
 /**
  * Generate time-based segments from frame detections
  */
-function generateSegments(frameDetections: BackendFrameDetection[], fps: number): Segment[] {
+function generateSegments(frameDetections: BackendFrameDetection[], fps: number, detectionKey: string = 'emotion'): Segment[] {
   if (frameDetections.length === 0) return [];
   
   const segments: Segment[] = [];
@@ -442,7 +456,7 @@ function generateSegments(frameDetections: BackendFrameDetection[], fps: number)
     
     if (segmentStart !== currentSegmentStart && currentSegmentDetections.length > 0) {
       // Finalize previous segment
-      segments.push(createSegment(currentSegmentStart, currentSegmentDetections, segmentDuration));
+      segments.push(createSegment(currentSegmentStart, currentSegmentDetections, segmentDuration, detectionKey));
       currentSegmentDetections = [];
     }
     
@@ -452,20 +466,20 @@ function generateSegments(frameDetections: BackendFrameDetection[], fps: number)
   
   // Add final segment
   if (currentSegmentDetections.length > 0) {
-    segments.push(createSegment(currentSegmentStart, currentSegmentDetections, segmentDuration));
+    segments.push(createSegment(currentSegmentStart, currentSegmentDetections, segmentDuration, detectionKey));
   }
   
   return segments;
 }
 
-function createSegment(startTime: number, frames: BackendFrameDetection[], duration: number): Segment {
+function createSegment(startTime: number, frames: BackendFrameDetection[], duration: number, detectionKey: string = 'emotion'): Segment {
   const totalPeople = frames.reduce((sum, f) => sum + f.people_detected, 0);
   
   // Find most common label across frames
   const labelCounts: Record<string, number> = {};
   for (const frame of frames) {
     for (const person of frame.people) {
-      const label = extractLabel(person.analysis_result);
+      const label = extractLabel(person.analysis_result, detectionKey);
       labelCounts[label] = (labelCounts[label] || 0) + 1;
     }
   }

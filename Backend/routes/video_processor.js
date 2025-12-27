@@ -250,7 +250,7 @@ class VideoProcessor {
 	/**
 	 * Step 2: Analyze frames with vision model
 	 */
-	async analyzeFrames(manifestPath, taskDescription) {
+	async analyzeFrames(manifestPath, taskDescription, detectionKey = 'emotion') {
 		this.updateStatus('analyzing_frames', 2, {
 			action: 'Starting frame analysis',
 			model: this.models.frameAnalysis,
@@ -319,6 +319,10 @@ class VideoProcessor {
 		
 		const detections = JSON.parse(fs.readFileSync(detectionsPath, "utf8"));
 		
+		// Add detectionKey to detections.json
+		detections.detection_key = detectionKey;
+		fs.writeFileSync(detectionsPath, JSON.stringify(detections, null, 2));
+		
 		const totalPeople = detections.frame_detections.reduce(
 			(sum, f) => sum + f.people_detected,
 			0
@@ -331,6 +335,7 @@ class VideoProcessor {
 			`✓ Analyzed ${detections.frame_detections.length} frames, detected ${totalPeople} people total`
 		);
 		console.log(`[LLM CONNECTION] ✓ Vision model connection and processing confirmed successful`);
+		console.log(`[LLM CONNECTION] ✓ Detection key set to: ${detectionKey}`);
 		
 		this.updateStatus('analyzing_frames', 2, {
 			action: 'Frame analysis completed',
@@ -338,6 +343,7 @@ class VideoProcessor {
 			framesAnalyzed: detections.frame_detections.length,
 			totalPeopleDetected: totalPeople,
 			detectionsPath,
+			detectionKey,
 			llmConnectionConfirmed: true
 		});
 
@@ -347,7 +353,7 @@ class VideoProcessor {
 	/**
 	 * Step 3: Create annotated video
 	 */
-	async annotateVideo(videoPath, detectionsPath, outputPath = null) {
+	async annotateVideo(videoPath, detectionsPath, outputPath = null, detectionKey = 'emotion') {
 		this.updateStatus('annotating_video', 3, {
 			action: 'Starting video annotation',
 			videoPath,
@@ -362,7 +368,7 @@ class VideoProcessor {
 			outputPath = path.join(this.workDir, `${videoStem}_annotated.mp4`);
 		}
 
-		const args = [videoPath, detectionsPath, outputPath];
+		const args = [videoPath, detectionsPath, outputPath, detectionKey];
 
 		const annotatorScript = path.join(__dirname, "src", "video_annotator.py");
 		
@@ -539,12 +545,13 @@ class VideoProcessor {
 	/**
 	 * Process entire video pipeline
 	 */
-	async processVideo(videoPath, taskDescription, outputPath = null, skipRefinement = false) {
+	async processVideo(videoPath, taskDescription, outputPath = null, skipRefinement = false, detectionKey = 'emotion') {
 		this.updateStatus('initializing', 0, {
 			action: 'Initializing video processing pipeline',
 			videoPath,
 			taskDescription,
 			skipRefinement,
+			detectionKey,
 			models: this.models
 		});
 		
@@ -554,6 +561,7 @@ class VideoProcessor {
 		console.log(`Video: ${videoPath}`);
 		console.log(`Task Description: ${taskDescription}`);
 		console.log(`Skip Refinement: ${skipRefinement}`);
+		console.log(`Detection Key: ${detectionKey}`);
 		console.log(`Frame Interval: ${this.frameInterval}`);
 		console.log(`Batch Size: ${this.batchSize}`);
 		console.log(`Models:`, this.models);
@@ -578,7 +586,8 @@ class VideoProcessor {
 			// Step 2: Analyze frames with refined task
 			const { detectionsPath, detections } = await this.analyzeFrames(
 				manifestPath,
-				refinedTask
+				refinedTask,
+				detectionKey
 			);
 
 			// Step 3: Annotate video (optional, skip for faster testing)
@@ -587,7 +596,8 @@ class VideoProcessor {
 				annotatedVideoPath = await this.annotateVideo(
 					videoPath,
 					detectionsPath,
-					outputPath
+					outputPath,
+					detectionKey
 				);
 			} else {
 				console.log(

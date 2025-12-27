@@ -1,8 +1,33 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Video, Clock, CheckCircle2, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+
+// Hook for animated dots
+const useAnimatedDots = (isActive: boolean) => {
+  const [dots, setDots] = useState("");
+  
+  useEffect(() => {
+    if (!isActive) {
+      setDots("");
+      return;
+    }
+    
+    const interval = setInterval(() => {
+      setDots((prev) => {
+        if (prev === "") return ".";
+        if (prev === ".") return "..";
+        if (prev === "..") return "...";
+        return "";
+      });
+    }, 500);
+    
+    return () => clearInterval(interval);
+  }, [isActive]);
+  
+  return dots;
+};
 
 interface VideoCardProps {
   video: {
@@ -20,6 +45,8 @@ export const VideoCard = ({ video }: VideoCardProps) => {
   const navigate = useNavigate();
   const { title, uploadDate, status, thumbnail, detectionsUrl, statusMessage, stem } = video;
   const [thumbnailError, setThumbnailError] = useState(false);
+  const isProcessing = status === "processing" || status === "analyzing";
+  const animatedDots = useAnimatedDots(isProcessing && !!statusMessage);
   const statusConfig = {
     processing: {
       label: "Processing",
@@ -56,7 +83,6 @@ export const VideoCard = ({ video }: VideoCardProps) => {
   };
 
   const isClickable = status === "completed" && stem;
-  const isProcessing = status === "processing" || status === "analyzing";
 
   return (
     <div 
@@ -104,7 +130,9 @@ export const VideoCard = ({ video }: VideoCardProps) => {
             <span>{uploadDate}</span>
           </div>
           {statusMessage && (
-            <span className="text-xs text-muted-foreground">{statusMessage}</span>
+            <span className="text-xs text-muted-foreground">
+              {statusMessage}{animatedDots}
+            </span>
           )}
           {detectionsUrl && (
             <a

@@ -140,12 +140,14 @@ app.post('/upload', upload.single('video'), (req, res) => {
     // Check if refined prompt was sent from frontend
     const refinedPrompt = req.body.refinedPrompt;
     const skipRefinement = !!refinedPrompt; // Skip refinement if refined prompt is provided
+    const detectionKey = req.body.detectionKey || 'emotion'; // Get selected detection key, default to emotion
     
     if (refinedPrompt) {
       console.log('[UPLOAD DEBUG] Received refined prompt from frontend:', refinedPrompt);
     } else {
       console.log('[UPLOAD DEBUG] No refined prompt received, will use default or refine');
     }
+    console.log('[UPLOAD DEBUG] Detection key:', detectionKey);
     
     // Auto-start processing pipeline asynchronously
     const autoProcess = process.env.AUTO_PROCESS !== 'false';
@@ -176,6 +178,7 @@ app.post('/upload', upload.single('video'), (req, res) => {
         videoPath: fileInfo.path,
         taskDescription,
         isRefinedPrompt: skipRefinement,
+        detectionKey: detectionKey,
         models: {
           promptRefinement: 'gemini-2.0-flash',
           frameAnalysis: 'Qwen/Qwen2.5-VL-7B-Instruct'
@@ -233,7 +236,8 @@ app.post('/upload', upload.single('video'), (req, res) => {
           
           console.log('[PROCESSING DEBUG] Starting video processing with task:', taskDescription);
           console.log('[PROCESSING DEBUG] Skip refinement flag:', skipRefinement);
-          const result = await processor.processVideo(fileInfo.path, taskDescription, null, skipRefinement);
+          console.log('[PROCESSING DEBUG] Detection key:', detectionKey);
+          const result = await processor.processVideo(fileInfo.path, taskDescription, null, skipRefinement, detectionKey);
           
           const finalStatus = {
             ...status,

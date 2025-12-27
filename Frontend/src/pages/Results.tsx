@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -101,21 +101,6 @@ const Results = () => {
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       setCurrentTime(videoRef.current.currentTime);
-      // Update duration if available and valid
-      if (videoRef.current.duration && !isNaN(videoRef.current.duration) && isFinite(videoRef.current.duration)) {
-        setVideoDuration(videoRef.current.duration);
-      }
-    }
-  };
-
-  const handleLoadedMetadata = () => {
-    if (videoRef.current) {
-      setVideoReady(true);
-      setVideoError(null);
-      // Set duration from video metadata
-      if (videoRef.current.duration && !isNaN(videoRef.current.duration) && isFinite(videoRef.current.duration)) {
-        setVideoDuration(videoRef.current.duration);
-      }
     }
   };
 
@@ -193,34 +178,24 @@ const Results = () => {
     return null;
   };
   
-  // Get cumulative stats for a person (for frame count display and time range)
+  // Get cumulative stats for a person (for frame count display)
   const getPersonCumulativeStats = (personId: number, currentTime: number) => {
     if (!analysisData) return { frameCount: 0, firstSeen: null, lastSeen: null };
     
-    // Get all detections for this person (not filtered by currentTime)
-    const allPersonDetections = analysisData.personDetections.filter(
-      d => d.personId === personId
+    const detectionsUpToTime = analysisData.personDetections.filter(
+      d => d.personId === personId && d.timestamp <= currentTime
     );
     
-    if (allPersonDetections.length === 0) {
+    if (detectionsUpToTime.length === 0) {
       return { frameCount: 0, firstSeen: null, lastSeen: null };
     }
     
-    // Get frame count up to current time
-    const detectionsUpToTime = allPersonDetections.filter(
-      d => d.timestamp <= currentTime
-    );
-    
-    // Get time range from ALL detections (static, doesn't change with currentTime)
-    // Find the smallest (first detection) and largest (last detection) timestamps
-    const allTimestamps = allPersonDetections.map(d => d.timestamp);
-    const smallestTime = Math.min(...allTimestamps);
-    const largestTime = Math.max(...allTimestamps);
+    const timestamps = detectionsUpToTime.map(d => d.timestamp).sort((a, b) => a - b);
     
     return {
       frameCount: detectionsUpToTime.length,
-      firstSeen: smallestTime,
-      lastSeen: largestTime,
+      firstSeen: timestamps[0] ?? null,
+      lastSeen: timestamps[timestamps.length - 1] ?? null,
     };
   };
 
@@ -235,6 +210,138 @@ const Results = () => {
     if (confidence >= 90) return "bg-green-500";
     if (confidence >= 75) return "bg-yellow-500";
     return "bg-orange-500";
+  };
+
+  // Calculate timeline segments for each person (time-based detection segments)
+  const personTimelineData = useMemo(() => {
+    if (!analysisData) return [];
+    
+    const fps = analysisData.fps || 30;
+    const frameDuration = 1 / fps; // Duration of one frame in seconds
+    
+    return analysisData.peopleStats.map(personStat => {
+      // Get all detections for this person, sorted by timestamp
+      const personDetections = analysisData.personDetections
+        .filter(d => d.personId === personStat.personId)
+        .sort((a, b) => a.timestamp - b.timestamp);
+      
+      if (personDetections.length === 0) {
+        return {
+          personId: personStat.personId,
+          segments: [],
+          totalDuration: 0,
+          startTime: 0,
+          endTime: 0,
+        };
+      }
+      
+      // Create segments by grouping consecutive detections with the same label
+      const segments: Array<{
+        label: string;
+        startTime: number;
+        endTime: number;
+        duration: number;
+        frameCount: number;
+      }> = [];
+      
+      let currentSegment: {
+        label: string;
+        startTime: number;
+        endTime: number;
+        frameCount: number;
+      } | null = null;
+      
+      personDetections.forEach((detection, index) => {
+        const segmentEndTime = detection.timestamp + frameDuration;
+        
+        if (!currentSegment || currentSegment.label !== detection.label) {
+          // Start a new segment
+          if (currentSegment) {
+            // Extend previous segment to the start of this new detection
+            segments.push({
+              label: currentSegment.label,
+              startTime: currentSegment.startTime,
+              endTime: detection.timestamp, // Extend to start of next detection
+              duration: detection.timestamp - currentSegment.startTime,
+              frameCount: currentSegment.frameCount,
+            });
+          }
+          
+          currentSegment = {
+            label: detection.label,
+            startTime: detection.timestamp,
+            endTime: segmentEndTime,
+            frameCount: 1,
+          };
+        } else {
+          // Extend current segment
+          currentSegment.endTime = segmentEndTime;
+          currentSegment.frameCount += 1;
+        }
+        
+        // If this is the last detection, finalize the segment (will extend to video end in render)
+        if (index === personDetections.length - 1 && currentSegment) {
+          segments.push({
+            label: currentSegment.label,
+            startTime: currentSegment.startTime,
+            endTime: currentSegment.endTime,
+            duration: currentSegment.endTime - currentSegment.startTime,
+            frameCount: currentSegment.frameCount,
+          });
+        }
+      });
+      
+      const startTime = personDetections[0]?.timestamp || 0;
+      const endTime = personDetections[personDetections.length - 1]?.timestamp + frameDuration || 0;
+      const totalDuration = endTime - startTime;
+      const totalFrames = personDetections.length;
+      
+      return {
+        personId: personStat.personId,
+        segments,
+        totalDuration,
+        totalFrames,
+        startTime,
+        endTime,
+      };
+    });
+  }, [analysisData]);
+
+  // Color mapping for detection types - using purple to blue gradient theme
+  const detectionColorMap = useMemo(() => {
+    if (!analysisData) return new Map<string, string>();
+    
+    const colorMap = new Map<string, string>();
+    // Purple to blue gradient colors matching the theme
+    const COLORS = [
+      '#8b5cf6', // purple-500
+      '#7c3aed', // purple-600
+      '#6d28d9', // purple-700
+      '#6366f1', // indigo-500
+      '#4f46e5', // indigo-600
+      '#3b82f6', // blue-500
+      '#2563eb', // blue-600
+      '#1d4ed8', // blue-700
+      '#06b6d4', // cyan-500
+      '#0891b2', // cyan-600
+      '#a855f7', // violet-500
+      '#9333ea', // violet-600
+    ];
+    
+    // Get all unique labels
+    const allLabels = new Set<string>();
+    analysisData.personDetections.forEach(d => allLabels.add(d.label));
+    
+    // Assign colors to labels
+    Array.from(allLabels).forEach((label, index) => {
+      colorMap.set(label, COLORS[index % COLORS.length]);
+    });
+    
+    return colorMap;
+  }, [analysisData]);
+
+  const getDetectionColor = (label: string): string => {
+    return detectionColorMap.get(label) || '#8b5cf6'; // default purple
   };
 
   // Loading state
@@ -314,13 +421,13 @@ const Results = () => {
                         onTimeUpdate={handleTimeUpdate}
                         onPlay={() => setIsPlaying(true)}
                         onPause={() => setIsPlaying(false)}
-                        onLoadedMetadata={handleLoadedMetadata}
                         onLoadedData={() => {
                           setVideoReady(true);
                           setVideoError(null);
-                          // Update duration on loaded data as well
-                          if (videoRef.current?.duration && !isNaN(videoRef.current.duration) && isFinite(videoRef.current.duration)) {
-                            setVideoDuration(videoRef.current.duration);
+                        }}
+                        onLoadedMetadata={() => {
+                          if (videoRef.current) {
+                            setVideoDuration(videoRef.current.duration || 0);
                           }
                         }}
                         onError={(e) => {
@@ -413,23 +520,16 @@ const Results = () => {
 
                 {/* Video Timeline Scrubber */}
                 <div className="mt-4 space-y-2">
-                  <div className="relative w-full h-2 bg-muted rounded-full overflow-hidden">
-                    <div 
-                      className="absolute left-0 top-0 h-full bg-primary rounded-full transition-[width] duration-150 ease-linear will-change-[width]"
-                      style={{ 
-                        width: `${videoDuration > 0 ? Math.min((currentTime / videoDuration) * 100, 100) : 0}%` 
-                      }}
-                    />
-                  </div>
+                  <Progress value={videoDuration > 0 ? (currentTime / videoDuration) * 100 : 0} className="h-2" />
                   <div className="flex items-center justify-between text-sm text-muted-foreground">
                     <span>{currentTime.toFixed(1)}s</span>
-                    <span>{videoDuration > 0 ? videoDuration.toFixed(1) : (analysisData?.videoDuration?.toFixed(1) || '0.0')}s</span>
+                    <span>{(videoDuration || analysisData.videoDuration).toFixed(1)}s</span>
                   </div>
                 </div>
               </CardContent>
             </Card>
 
-            {/* Analysis Timeline */}
+            {/* Analysis Timeline - Person Detection Timeline Bars */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -438,32 +538,117 @@ const Results = () => {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3">
-                  {analysisData.segments && analysisData.segments.length > 0 ? (
-                    analysisData.segments.map((segment, index) => (
-                      <div key={index} className="flex items-center gap-4">
-                        <div className="text-sm text-muted-foreground min-w-[80px] font-mono">
-                          {(segment.startTime ?? 0).toFixed(1)}s - {(segment.endTime ?? 0).toFixed(1)}s
-                        </div>
-                        <div className="flex-1 bg-muted rounded-full h-8 relative overflow-hidden">
-                          <div
-                            className="absolute inset-y-0 left-0 bg-gradient-to-r from-cyan-500 via-purple-500 to-purple-600 transition-all"
-                            style={{ width: `${Math.min(((segment.detectionCount ?? 0) / 10) * 100, 100)}%` }}
-                          />
-                          <div className="absolute inset-0 flex items-center px-3">
-                            <span className="text-xs font-medium text-foreground drop-shadow-sm">
-                              {segment.primaryDetection || 'No detections'}
-                            </span>
+                <div className="space-y-6">
+                  {personTimelineData.length > 0 ? (
+                    personTimelineData.map(({ personId, segments, totalDuration, totalFrames, startTime, endTime }) => {
+                      // Use actual video duration for timeline scale
+                      const actualVideoDuration = videoDuration || analysisData.videoDuration || 0;
+                      
+                      // Calculate tick intervals (show ticks every second, or adjust based on duration)
+                      const tickInterval = actualVideoDuration > 10 ? 2 : actualVideoDuration > 5 ? 1 : 0.5;
+                      const ticks: number[] = [];
+                      for (let t = 0; t <= actualVideoDuration; t += tickInterval) {
+                        ticks.push(t);
+                      }
+                      
+                      return (
+                        <div key={personId} className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <h3 className="text-lg font-semibold text-foreground">
+                              Person {personId}
+                            </h3>
+                            <Badge variant="secondary" className="text-xs">
+                              {totalFrames} frame{totalFrames !== 1 ? 's' : ''} detected
+                            </Badge>
                           </div>
+                          {segments.length > 0 ? (
+                            <div className="space-y-2">
+                              {/* Timeline Bar with ticks */}
+                              <div className="relative w-full">
+                                <div className="relative w-full h-6 bg-muted rounded-lg overflow-hidden">
+                                  {segments.map((segment, index) => {
+                                    // Extend each segment: if not the last, extend to next segment start; if last, extend to video end
+                                    let extendedEndTime = segment.endTime;
+                                    if (index < segments.length - 1) {
+                                      // Extend to start of next segment
+                                      extendedEndTime = segments[index + 1].startTime;
+                                    } else if (actualVideoDuration > 0) {
+                                      // Last segment extends to end of video
+                                      extendedEndTime = actualVideoDuration;
+                                    }
+                                    
+                                    const extendedDuration = extendedEndTime - segment.startTime;
+                                    const segmentWidth = actualVideoDuration > 0 
+                                      ? (extendedDuration / actualVideoDuration) * 100 
+                                      : 0;
+                                    const segmentLeft = actualVideoDuration > 0
+                                      ? (segment.startTime / actualVideoDuration) * 100
+                                      : 0;
+                                    
+                                    return (
+                                      <div
+                                        key={index}
+                                        className="absolute h-full cursor-pointer transition-opacity hover:opacity-90"
+                                        style={{
+                                          left: `${segmentLeft}%`,
+                                          width: `${segmentWidth}%`,
+                                          backgroundColor: getDetectionColor(segment.label),
+                                        }}
+                                        title={`${segment.label}: ${segment.startTime.toFixed(1)}s - ${extendedEndTime.toFixed(1)}s (${segment.frameCount} frames)`}
+                                      />
+                                    );
+                                  })}
+                                </div>
+                                {/* Timeline ticks */}
+                                <div className="relative w-full h-3 mt-1 mb-4">
+                                  {ticks.map((tickTime, index) => {
+                                    const tickPosition = actualVideoDuration > 0
+                                      ? (tickTime / actualVideoDuration) * 100
+                                      : 0;
+                                    
+                                    return (
+                                      <div
+                                        key={index}
+                                        className="absolute top-0 flex flex-col items-center"
+                                        style={{ left: `${tickPosition}%`, transform: 'translateX(-50%)' }}
+                                      >
+                                        <div className="w-px h-2 bg-border" />
+                                        <span className="text-[10px] text-muted-foreground mt-0.5 font-mono">
+                                          {tickTime.toFixed(tickInterval < 1 ? 1 : 0)}s
+                                        </span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                              
+                              {/* Legend */}
+                              <div className="flex flex-wrap gap-2 text-xs mt-6">
+                                {Array.from(new Set(segments.map(s => s.label))).map((label) => (
+                                  <div key={label} className="flex items-center gap-1.5">
+                                    <div
+                                      className="w-3 h-3 rounded"
+                                      style={{ backgroundColor: getDetectionColor(label) }}
+                                    />
+                                    <span className="text-muted-foreground">{label}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-center py-4 text-muted-foreground text-sm">
+                              No detections available for this person
+                            </div>
+                          )}
+                          {personTimelineData.length > 1 && personId !== personTimelineData[personTimelineData.length - 1].personId && (
+                            <Separator className="mt-4" />
+                          )}
                         </div>
-                        <Badge variant="secondary" className="min-w-[100px] justify-center">
-                          {segment.detectionCount ?? 0} detections
-                        </Badge>
-                      </div>
-                    ))
+                      );
+                    })
                   ) : (
                     <div className="text-center py-4 text-muted-foreground text-sm">
-                      No timeline segments available
+                      No person detection data available
                     </div>
                   )}
                 </div>
@@ -539,16 +724,6 @@ const Results = () => {
                         const currentAction = currentDetection?.label || 'Not detected yet';
                         const currentConfidence = currentDetection?.confidence ?? 0;
                         
-                        // Calculate time range directly from personDetections to ensure accuracy
-                        const allPersonDetections = analysisData.personDetections.filter(
-                          d => d.personId === personStat.personId
-                        );
-                        const allTimestamps = allPersonDetections.map(d => d.timestamp).filter(ts => !isNaN(ts) && ts >= 0);
-                        const timeRange = allTimestamps.length > 0 ? {
-                          firstSeen: Math.min(...allTimestamps),
-                          lastSeen: Math.max(...allTimestamps)
-                        } : null;
-                        
                         return (
                           <div
                             key={personStat.personId}
@@ -568,7 +743,7 @@ const Results = () => {
                             <div className="space-y-2">
                               <div>
                                 <div className="flex items-center justify-between mb-1">
-                                  <span className="text-xs text-muted-foreground">Action:</span>
+                                  <span className="text-xs text-muted-foreground">Action</span>
                                   <span className="text-xs font-medium text-foreground">
                                     {currentAction}
                                   </span>
@@ -577,7 +752,7 @@ const Results = () => {
                               
                               <div>
                                 <div className="flex items-center justify-between mb-1">
-                                  <span className="text-xs text-muted-foreground">Confidence:</span>
+                                  <span className="text-xs text-muted-foreground">Confidence</span>
                                   <span className={`text-xs font-semibold ${getConfidenceColor(currentConfidence)}`}>
                                     {currentConfidence.toFixed(1)}%
                                   </span>
@@ -594,16 +769,16 @@ const Results = () => {
                                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                                   <span>Frame Time:</span>
                                   <span className="font-mono">
-                                    {currentTime.toFixed(1)}s
+                                    {currentDetection.timestamp.toFixed(1)}s
                                   </span>
                                 </div>
                               )}
                               
-                              {timeRange && (
+                              {cumulativeStats.firstSeen !== null && (
                                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                                   <span>Time Range:</span>
                                   <span className="font-mono">
-                                    {timeRange.firstSeen.toFixed(1)}s - {timeRange.lastSeen.toFixed(1)}s
+                                    {cumulativeStats.firstSeen.toFixed(1)}s - {cumulativeStats.lastSeen !== null ? cumulativeStats.lastSeen.toFixed(1) + 's' : 'current'}
                                   </span>
                                 </div>
                               )}

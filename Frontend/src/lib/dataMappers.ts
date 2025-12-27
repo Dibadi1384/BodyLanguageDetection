@@ -257,12 +257,10 @@ function transformDetectionsData(
   const videoWidth = firstFrame?.image_width || 1920;
   const videoHeight = firstFrame?.image_height || 1080;
   
-  // Calculate duration from maximum frame index
+  // Calculate duration from actual video total frames
   const fps = data.video_info?.fps || 30;
-  const maxFrameIndex = frameDetections.length > 0 
-    ? Math.max(...frameDetections.map(f => f.frame_index ?? 0))
-    : 0;
-  const videoDuration = maxFrameIndex > 0 ? maxFrameIndex / fps : 0;
+  const totalFrames = data.video_info?.total_frames || 0;
+  const videoDuration = totalFrames > 0 && fps > 0 ? totalFrames / fps : 0;
   
   // Transform detections and track people
   const detections: Detection[] = [];

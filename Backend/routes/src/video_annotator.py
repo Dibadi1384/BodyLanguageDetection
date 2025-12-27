@@ -227,7 +227,8 @@ def build_person_timelines(frame_detections: Dict) -> Dict:
     return timelines
 
 def get_interpolated_person_data(person_id: int, frame_idx: int, timelines: Dict, max_gap: int = 90) -> Dict:
-    """Get person data for a frame, with interpolation if needed."""
+    """Get person data for a frame, with interpolation if needed.
+    Continues using the last known detection until a new detection is found."""
     if person_id not in timelines:
         return None
     
@@ -262,13 +263,13 @@ def get_interpolated_person_data(person_id: int, frame_idx: int, timelines: Dict
             interpolated['bbox'] = interpolate_bbox(prev_data['bbox'], next_data['bbox'], alpha)
             return interpolated
     
-    # If only prev and it's recent enough, use it
+    # If only prev exists, use it (continue with previous detection until new one is found)
+    # This ensures detections persist across frames even if there are gaps
     if prev_detection:
         prev_frame, prev_data = prev_detection
-        if frame_idx - prev_frame <= max_gap // 2:
-            return prev_data
+        return prev_data
     
-    # If only next and it's close enough, use it
+    # If only next exists and it's close enough, use it (for cases where detection starts mid-video)
     if next_detection:
         next_frame, next_data = next_detection
         if next_frame - frame_idx <= max_gap // 2:

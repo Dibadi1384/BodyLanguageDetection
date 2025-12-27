@@ -102,7 +102,7 @@ class VideoProcessor {
 	/**
 	 * Run a Python script and capture output
 	 */
-	async runPythonScript(scriptPath, args = []) {
+	async runPythonScript(scriptPath, args = [], onStderrLine = null) {
 		return new Promise((resolve, reject) => {
 			// Detect Python command based on OS
 			const isWindows = process.platform === 'win32';
@@ -155,8 +155,13 @@ class VideoProcessor {
 				// Log stderr output (Python scripts often use stderr for status messages)
 				const lines = output.trim().split('\n');
 				lines.forEach(line => {
-					if (line.trim()) {
-						console.log(line.trim());
+					const trimmed = line.trim();
+					if (trimmed) {
+						console.log(trimmed);
+						// Call callback if provided (for real-time parsing)
+						if (onStderrLine && typeof onStderrLine === 'function') {
+							onStderrLine(trimmed);
+						}
 					}
 				});
 			});
@@ -281,22 +286,79 @@ class VideoProcessor {
 		console.log(`[LLM CONNECTION] Starting Python script execution...`);
 		console.log(`[LLM CONNECTION] Waiting for LLM connection confirmation from Python script...`);
 		
-		const result = await this.runPythonScript(analyzerScript, args);
+		// Track batch progress
+		let batchProgress = {
+			currentBatch: 0,
+			totalBatches: 0,
+			totalFrames: 0,
+			batchSize: safeBatchSize
+		};
+
+		// Parse stderr in real-time for batch progress
+		const parseStderrLine = (line) => {
+			// "Processing 8 frames in batches of 2..."
+			const framesMatch = line.match(/Processing (\d+) frames in batches of (\d+)/);
+			if (framesMatch) {
+				batchProgress.totalFrames = parseInt(framesMatch[1]);
+				batchProgress.batchSize = parseInt(framesMatch[2]);
+				batchProgress.totalBatches = Math.ceil(batchProgress.totalFrames / batchProgress.batchSize);
+			}
+			
+			// "Processing batch 1/4 (frames 0 to 1)..."
+			const batchMatch = line.match(/Processing batch (\d+)\/(\d+)/);
+			if (batchMatch) {
+				batchProgress.currentBatch = parseInt(batchMatch[1]);
+				batchProgress.totalBatches = parseInt(batchMatch[2]);
+				
+				// Update status with batch progress
+				const batchPercentage = Math.round((batchProgress.currentBatch / batchProgress.totalBatches) * 100);
+				this.updateStatus('analyzing_frames', 2, {
+					action: 'Analyzing frames',
+					model: this.models.frameAnalysis,
+					currentBatch: batchProgress.currentBatch,
+					totalBatches: batchProgress.totalBatches,
+					batchPercentage,
+					framesExtracted: batchProgress.totalFrames
+				});
+			}
+			
+			// "Batch 1 complete: 2 frames analyzed, 4 people detected"
+			const completeMatch = line.match(/Batch (\d+) complete: (\d+) frames analyzed/);
+			if (completeMatch) {
+				const completedBatch = parseInt(completeMatch[1]);
+				const framesInBatch = parseInt(completeMatch[2]);
+				const batchPercentage = Math.round((completedBatch / batchProgress.totalBatches) * 100);
+				
+				this.updateStatus('analyzing_frames', 2, {
+					action: 'Analyzing frames',
+					model: this.models.frameAnalysis,
+					currentBatch: completedBatch,
+					totalBatches: batchProgress.totalBatches,
+					batchPercentage,
+					framesExtracted: batchProgress.totalFrames,
+					framesAnalyzed: completedBatch * batchProgress.batchSize
+				});
+			}
+		};
+
+		const result = await this.runPythonScript(analyzerScript, args, parseStderrLine);
 		
 		console.log(`[LLM CONNECTION] Python script execution completed`);
 
-		// Parse stderr for connection confirmation messages
+		// Parse stderr for connection confirmation messages (batch progress already handled in real-time)
 		if (result.stderr) {
 			const stderrLines = result.stderr.split('\n');
 			stderrLines.forEach(line => {
-				if (line.includes('Using model:') || line.includes('model:')) {
-					console.log(`[LLM CONNECTION] ✓ ${line.trim()}`);
+				const trimmed = line.trim();
+				
+				if (trimmed.includes('Using model:') || trimmed.includes('model:')) {
+					console.log(`[LLM CONNECTION] ✓ ${trimmed}`);
 				}
-				if (line.includes('Fallback configured') || line.includes('Warning:')) {
-					console.log(`[LLM CONNECTION] ${line.trim()}`);
+				if (trimmed.includes('Fallback configured') || trimmed.includes('Warning:')) {
+					console.log(`[LLM CONNECTION] ${trimmed}`);
 				}
-				if (line.includes('Loaded') && line.includes('frames')) {
-					console.log(`[LLM CONNECTION] ${line.trim()}`);
+				if (trimmed.includes('Loaded') && trimmed.includes('frames')) {
+					console.log(`[LLM CONNECTION] ${trimmed}`);
 				}
 			});
 		}

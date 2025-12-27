@@ -55,8 +55,20 @@ const formatStatusMessage = (status: any): string => {
   
   // Stage 2: Analyzing frames (Detection)
   if (stage === 2 || statusType === 'analyzing_frames') {
-    const framesAnalyzed = details.framesAnalyzed !== undefined ? details.framesAnalyzed : (status.framesAnalyzed !== undefined ? status.framesAnalyzed : null);
+    // Check for batch progress information
+    const currentBatch = details.currentBatch !== undefined ? details.currentBatch : (status.currentBatch !== undefined ? status.currentBatch : null);
+    const totalBatches = details.totalBatches !== undefined ? details.totalBatches : (status.totalBatches !== undefined ? status.totalBatches : null);
+    const batchPercentage = details.batchPercentage !== undefined ? details.batchPercentage : (status.batchPercentage !== undefined ? status.batchPercentage : null);
     const framesExtracted = details.framesExtracted !== undefined ? details.framesExtracted : (status.framesExtracted !== undefined ? status.framesExtracted : null);
+    
+    // If we have batch information, show batch progress
+    if (currentBatch !== null && totalBatches !== null && totalBatches > 0) {
+      const percentage = batchPercentage !== null ? batchPercentage : Math.round((currentBatch / totalBatches) * 100);
+      return `Detection Progress Batch ${currentBatch}/${totalBatches}`;
+    }
+    
+    // Fallback to frame-based progress
+    const framesAnalyzed = details.framesAnalyzed !== undefined ? details.framesAnalyzed : (status.framesAnalyzed !== undefined ? status.framesAnalyzed : null);
     
     if (framesAnalyzed !== null && framesAnalyzed !== undefined && framesExtracted !== null && framesExtracted !== undefined) {
       const percentage = Math.min(100, Math.round((framesAnalyzed / framesExtracted) * 100));

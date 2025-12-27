@@ -250,7 +250,8 @@ function transformDetectionsData(
   const frameDetections = data.frame_detections || [];
   
   // Get detection_key from data (stored in detections.json)
-  const detectionKey = (data as any).detection_key || 'emotion';
+  // If detection_key is explicitly set, use it; otherwise use null to indicate "find most confident"
+  const detectionKey = (data as any).detection_key || null;
   
   // Get video dimensions from first frame detection
   const firstFrame = frameDetections[0];
@@ -286,6 +287,7 @@ function transformDetectionsData(
       
       // Extract primary label from analysis_result using the selected detection key
       const analysisResult = person.analysis_result || {};
+      // Pass null if no key selected (will find most confident), otherwise pass the key
       const label = extractLabel(analysisResult, detectionKey) || `Person ${personId}`;
       const confidence = (person.bbox_confidence ?? 0) * 100;
       
@@ -394,38 +396,177 @@ function transformDetectionsData(
 }
 
 /**
- * Extract a human-readable label from analysis_result, prioritizing the selected detection key
+ * Extract a string value from a value that might be a string, number, or object
  */
-function extractLabel(analysisResult: Record<string, any>, detectionKey: string = 'emotion'): string {
-  // Prioritize the selected detection key
-  if (detectionKey in analysisResult && analysisResult[detectionKey]) {
-    const value = analysisResult[detectionKey];
-    if (typeof value === 'string' && value) {
-      return `${capitalize(detectionKey)}: ${value}`;
-    } else if (typeof value === 'number' && value) {
-      return `${capitalize(detectionKey)}: ${value}`;
+function extractStringValue(value: any, key: string): string | null {
+  if (!value) return null;
+  
+  // If it's already a string or number, return it as string
+  if (typeof value === 'string' && value) {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return String(value);
+  }
+  
+  // If it's an object, try to extract the actual value
+  if (typeof value === 'object' && value !== null) {
+    // Try the same key name first (e.g., emotion.emotion)
+    if (key in value && typeof value[key] === 'string' && value[key]) {
+      return value[key];
+    }
+    // Try common property names
+    if ('value' in value && typeof value.value === 'string' && value.value) {
+      return value.value;
+    }
+    if ('name' in value && typeof value.name === 'string' && value.name) {
+      return value.name;
+    }
+    // Try to find any string property (excluding metadata fields)
+    for (const [propKey, propValue] of Object.entries(value)) {
+      if (typeof propValue === 'string' && propValue && 
+          !['confidence', 'intensity', 'score'].includes(propKey.toLowerCase())) {
+        return propValue;
+      }
     }
   }
   
-  // Fallback to other keys if selected key not found
-  // Look for common fields in analysis_result
-  if (analysisResult.emotion) {
-    return `Emotion: ${analysisResult.emotion}`;
-  }
-  if (analysisResult.action) {
-    return `Action: ${analysisResult.action}`;
-  }
-  if (analysisResult.pose) {
-    return `Pose: ${analysisResult.pose}`;
-  }
-  if (analysisResult.expression) {
-    return `Expression: ${analysisResult.expression}`;
+  return null;
+}
+
+/**
+ * Check if a key represents an emotion (common emotion names)
+ */
+function isEmotionKey(key: string): boolean {
+  const emotionKeys = [
+    'emotion', 'anger', 'angry', 'happy', 'happiness', 'sad', 'sadness',
+    'fear', 'surprise', 'disgust', 'neutral', 'joy', 'excitement',
+    'calm', 'anxious', 'frustrated', 'confused', 'pleased', 'disappointed'
+  ];
+  return emotionKeys.includes(key.toLowerCase());
+}
+
+/**
+ * Get confidence score from a value (handles different formats)
+ */
+function getConfidenceScore(value: any, key: string): number {
+  // If value is a number, use it as confidence
+  if (typeof value === 'number') {
+    return value;
   }
   
-  // Try to find any key with a string value
+  // If value is an object, check for confidence fields
+  if (typeof value === 'object' && value !== null) {
+    // Check for explicit confidence field
+    if ('confidence' in value && typeof value.confidence === 'number') {
+      return value.confidence;
+    }
+    if ('score' in value && typeof value.score === 'number') {
+      return value.score;
+    }
+    // If object has the key itself as a number (e.g., {anger: 0.9})
+    if (key in value && typeof value[key] === 'number') {
+      return value[key];
+    }
+  }
+  
+  // Default confidence for string values (lower priority)
+  if (typeof value === 'string' && value) {
+    return 0.5;
+  }
+  
+  return 0;
+}
+
+/**
+ * Find the most confident detection across all keys in analysis_result
+ */
+function findMostConfidentDetection(analysisResult: Record<string, any>): { key: string; value: any; confidence: number } | null {
+  let maxConfidence = -1;
+  let bestKey: string | null = null;
+  let bestValue: any = null;
+  
+  // Skip metadata keys
+  const skipKeys = ['confidence', 'intensity', 'score'];
+  
   for (const [key, value] of Object.entries(analysisResult)) {
-    if (typeof value === 'string' && key !== 'confidence') {
-      return `${capitalize(key)}: ${value}`;
+    if (skipKeys.includes(key.toLowerCase())) {
+      continue;
+    }
+    
+    const confidence = getConfidenceScore(value, key);
+    
+    // Only consider if we can extract a meaningful string value
+    const extracted = extractStringValue(value, key);
+    if (extracted && confidence > maxConfidence) {
+      maxConfidence = confidence;
+      bestKey = key;
+      bestValue = value;
+    }
+  }
+  
+  if (bestKey && maxConfidence >= 0) {
+    return { key: bestKey, value: bestValue, confidence: maxConfidence };
+  }
+  
+  return null;
+}
+
+/**
+ * Extract a human-readable label from analysis_result, prioritizing the selected detection key
+ * If no key is selected (null), prioritize the most confident detection
+ */
+function extractLabel(analysisResult: Record<string, any>, detectionKey: string | null = null): string {
+  // If user explicitly selected a key, prioritize it
+  if (detectionKey && detectionKey in analysisResult && analysisResult[detectionKey]) {
+    const extracted = extractStringValue(analysisResult[detectionKey], detectionKey);
+    if (extracted) {
+      return `${capitalize(detectionKey)}: ${extracted}`;
+    }
+  }
+  
+  // If no explicit key or key not found, find the most confident detection
+  const mostConfident = findMostConfidentDetection(analysisResult);
+  if (mostConfident) {
+    const extracted = extractStringValue(mostConfident.value, mostConfident.key);
+    if (extracted) {
+      return `${capitalize(mostConfident.key)}: ${extracted}`;
+    }
+  }
+  
+  // Fallback: try common fields in order
+  if (analysisResult.emotion) {
+    const extracted = extractStringValue(analysisResult.emotion, 'emotion');
+    if (extracted) {
+      return `Emotion: ${extracted}`;
+    }
+  }
+  if (analysisResult.action) {
+    const extracted = extractStringValue(analysisResult.action, 'action');
+    if (extracted) {
+      return `Action: ${extracted}`;
+    }
+  }
+  if (analysisResult.expression) {
+    const extracted = extractStringValue(analysisResult.expression, 'expression');
+    if (extracted) {
+      return `Expression: ${extracted}`;
+    }
+  }
+  if (analysisResult.pose) {
+    const extracted = extractStringValue(analysisResult.pose, 'pose');
+    if (extracted) {
+      return `Pose: ${extracted}`;
+    }
+  }
+  
+  // Last resort: find any key with a string value
+  for (const [key, value] of Object.entries(analysisResult)) {
+    if (key !== 'confidence') {
+      const extracted = extractStringValue(value, key);
+      if (extracted) {
+        return `${capitalize(key)}: ${extracted}`;
+      }
     }
   }
   
@@ -439,7 +580,7 @@ function capitalize(str: string): string {
 /**
  * Generate time-based segments from frame detections
  */
-function generateSegments(frameDetections: BackendFrameDetection[], fps: number, detectionKey: string = 'emotion'): Segment[] {
+function generateSegments(frameDetections: BackendFrameDetection[], fps: number, detectionKey: string | null = null): Segment[] {
   if (frameDetections.length === 0) return [];
   
   const segments: Segment[] = [];
@@ -470,7 +611,7 @@ function generateSegments(frameDetections: BackendFrameDetection[], fps: number,
   return segments;
 }
 
-function createSegment(startTime: number, frames: BackendFrameDetection[], duration: number, detectionKey: string = 'emotion'): Segment {
+function createSegment(startTime: number, frames: BackendFrameDetection[], duration: number, detectionKey: string | null = null): Segment {
   const totalPeople = frames.reduce((sum, f) => sum + f.people_detected, 0);
   
   // Find most common label across frames

@@ -117,8 +117,6 @@ This project uses the following LLM models:
 
 - **Prompt Refinement**: `gemini-2.0-flash` - Used for refining user prompts into detection instructions that the video analysis model can understand.
 
-- **Fallback Model**: The same `Qwen/Qwen2.5-VL-7B-Instruct` model is available via Open Router API as a fallback option. This is useful when you hit rate limits or token limits on the primary Hugging Face API.
-
 ### Demo Videos
 
 To test the model with example inputs, you can download all demo video clips here:
